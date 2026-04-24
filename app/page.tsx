@@ -178,22 +178,32 @@ export default function Home() {
             <button onClick={saveDeck} disabled={parsedTracks.length === 0} className="text-green-500 font-bold text-sm hover:underline disabled:opacity-30">GRAVAR TUDO</button>
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-            {parsedTracks.map(track => (
-              <div key={track.id} className="bg-zinc-950 p-3 rounded-xl flex items-center gap-3 border border-zinc-800 group hover:border-zinc-600 transition-colors">
-                {track.imageUrl ? (
-                  <img src={track.imageUrl} className="w-10 h-10 rounded shadow-lg object-cover" alt="" />
-                ) : (
-                  <div className="w-10 h-10 bg-zinc-800 rounded flex items-center justify-center"><span className="text-[10px] text-zinc-500">Sem foto</span></div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-bold truncate">{track.name}</p>
-                  <p className="text-[10px] text-zinc-500 truncate">{track.artist} • {track.year}</p>
+            {parsedTracks.map((track, i) => {
+              // Verifica se a música já existe no acervo salvo
+              const isDupe = savedTracks.some(t => t.id === track.id);
+              
+              return (
+                <div key={track.id} className={`bg-zinc-950 p-3 rounded-xl flex items-center justify-between border transition-all ${isDupe ? 'border-red-900/50 opacity-40 grayscale' : 'border-zinc-800 hover:border-zinc-600'}`}>
+                  <div className="flex items-center gap-4 truncate">
+                    {track.imageUrl ? (
+                      <img src={track.imageUrl} className="w-10 h-10 rounded shadow-lg object-cover" alt="" />
+                    ) : (
+                      <div className="w-10 h-10 bg-zinc-800 rounded flex items-center justify-center"><span className="text-[10px] text-zinc-500">Sem foto</span></div>
+                    )}
+                    <div className="truncate">
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs font-bold truncate">{track.name}</p>
+                        {isDupe && <span className="text-[9px] bg-red-900 text-red-200 px-2 py-0.5 rounded font-bold uppercase tracking-widest">Já está no acervo</span>}
+                      </div>
+                      <p className="text-[10px] text-zinc-500 truncate">{track.artist} • {track.year}</p>
+                    </div>
+                  </div>
+                  <button onClick={() => removerDoPreview(track.id)} className="text-zinc-700 hover:text-red-500 transition-colors p-1">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  </button>
                 </div>
-                <button onClick={() => removerDoPreview(track.id)} className="text-zinc-700 hover:text-red-500 transition-colors p-1">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
