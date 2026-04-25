@@ -46,24 +46,14 @@ export default function MobilePage() {
       .on('broadcast', { event: 'play-result' }, () => {
         setGameState('result');
       });
-
-    channel.subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        channel.send({ type: 'broadcast', event: 'join', payload: { name: name.toUpperCase() } });
-        
-        if (isReconnect) {
-            channel.subscribe((status) => {
+channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         channel.send({ type: 'broadcast', event: 'join', payload: { name: name.toUpperCase() } });
         
         if (isReconnect) {
             channel.send({ type: 'broadcast', event: 'request-sync', payload: { name: name.toUpperCase() } });
             setReady(true);
-            setGameState('waiting'); // ISSO MATA A TELA PRETA! Mostra o ícone carregando até a TV responder.
-        }
-        setJoined(true);
-      }
-    });
+            setGameState('waiting'); 
         }
         setJoined(true);
       }
@@ -74,9 +64,10 @@ export default function MobilePage() {
     channelRef.current = channel;
   };
 
-  const sinalizarPronto = () => {
+const sinalizarPronto = () => {
     channelRef.current?.send({ type: 'broadcast', event: 'player-ready', payload: { name: name.toUpperCase() } });
     setReady(true);
+    setGameState('waiting'); // <- Essa linha impede a tela preta
   };
 
   useEffect(() => {

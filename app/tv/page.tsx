@@ -37,6 +37,7 @@ export default function TVPage() {
   const [revealSuccess, setRevealSuccess] = useState<boolean | null>(null);
 
   const channelRef = useRef<any>(null);
+  const resolvingRef = useRef(false);
 
   useEffect(() => { setIsMounted(true); }, []);
 
@@ -133,6 +134,9 @@ export default function TVPage() {
   };
 
   const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerName: string | null) => {
+    if (resolvingRef.current) return; // <- SE JÁ ESTIVER RODANDO, IGNORA. Fim da duplicação!
+    resolvingRef.current = true; // <- Trava a porta.
+
     const activePlayer = players[playerIndex];
     const targetYear = parseInt(targetCard!.year);
     
@@ -141,51 +145,45 @@ export default function TVPage() {
     if (slotIndex < activePlayer.timeline.length && parseInt(activePlayer.timeline[slotIndex].year) < targetYear) playerAcertou = false;
 
     let novosJogadores = [...players];
+    let acertouDeFato = false;
 
     if (challengerName) {
       const challengerIndex = novosJogadores.findIndex(p => p.name === challengerName);
       novosJogadores[challengerIndex].tokens -= 1;
-
       if (!playerAcertou) {
-        const correctPos = getCorrectIndex(novosJogadores[challengerIndex].timeline, targetYear);
-        novosJogadores[challengerIndex].timeline.splice(correctPos, 0, targetCard!);
-        novosJogadores[challengerIndex].score += 1;
-        setRevealSuccess(false); // O jogador da vez errou
-      } else {
-        novosJogadores[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
-        novosJogadores[playerIndex].score += 1;
-        setRevealSuccess(true);
+        acertouDeFato = true; 
       }
     } else {
-      if (playerAcertou) {
-        novosJogadores[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
-        novosJogadores[playerIndex].score += 1;
-        setRevealSuccess(true);
-      } else {
-        setRevealSuccess(false);
-        tocarSomErro();
-      }
+      if (playerAcertou) acertouDeFato = true;
     }
 
-    setPlayers(novosJogadores);
+    if (!playerAcertou && !challengerName) {
+        pausarMusica();
+        tocarSomErro();
+    }
+
+    setRevealSuccess(acertouDeFato);
     setActionState('revealed');
     setGameState('playing');
-    checkWinCondition(novosJogadores);
 
-    // AGUARDA A ANIMAÇÃO ANTES DE ATUALIZAR A TIMELINE (EVITA DUPLICAÇÃO)
+    channelRef.current?.send({ 
+      type: 'broadcast', event: 'play-result', 
+      payload: { success: acertouDeFato, actualYear: targetCard?.year } 
+    });
+
     setTimeout(() => {
       let jogadoresAtualizados = [...novosJogadores];
       
       if (challengerName && !playerAcertou) {
-        // Copia profunda para não duplicar visualmente
         const cIdx = jogadoresAtualizados.findIndex(p => p.name === challengerName);
+        // Cópia profunda da timeline antes de inserir a carta
         jogadoresAtualizados[cIdx] = { ...jogadoresAtualizados[cIdx], timeline: [...jogadoresAtualizados[cIdx].timeline] };
         
         const correctPos = getCorrectIndex(jogadoresAtualizados[cIdx].timeline, targetYear);
         jogadoresAtualizados[cIdx].timeline.splice(correctPos, 0, targetCard!);
         jogadoresAtualizados[cIdx].score += 1;
       } else if (playerAcertou) {
-        // Copia profunda para não duplicar visualmente
+        // Cópia profunda da timeline antes de inserir a carta
         jogadoresAtualizados[playerIndex] = { ...jogadoresAtualizados[playerIndex], timeline: [...jogadoresAtualizados[playerIndex].timeline] };
         
         jogadoresAtualizados[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
@@ -221,6 +219,7 @@ export default function TVPage() {
   };
 
   const iniciarTurno = (playerIndex: number, currentPlayers: Player[], currentDeck: Track[]) => {
+    resolvingRef.current = false;
     setActionState('waiting');
     setRevealSuccess(null);
     setMobileAction(null);
