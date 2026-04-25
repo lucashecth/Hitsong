@@ -23,10 +23,10 @@ export default function TVPage() {
   const [usedTrackIds, setUsedTrackIds] = useState<Set<string>>(new Set());
   const [brokenTracks, setBrokenTracks] = useState<string[]>([]); 
 
-  // Novos Estados da Árvore de Decisão do Bônus
-  const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'bonus_ask' | 'bonus_vote' | 'winner'>('lobby');
+  // NOVO ESTADO: 'bonus_speak'
+  const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'bonus_ask' | 'bonus_speak' | 'bonus_vote' | 'winner'>('lobby');
   const [winner, setWinner] = useState<Player | null>(null);
-  const [challengeTimer, setChallengeTimer] = useState(0); // Usado para todos os timers
+  const [challengeTimer, setChallengeTimer] = useState(0); 
   const [pendingMove, setPendingMove] = useState<{ slotIndex: number, playerIndex: number } | null>(null);
   const [votes, setVotes] = useState<{ name: string, vote: boolean }[]>([]);
 
@@ -62,15 +62,7 @@ export default function TVPage() {
     return index;
   };
 
-  const checkWinCondition = (updatedPlayers: Player[]) => {
-    const winnerFound = updatedPlayers.find(p => p.score >= 10);
-    if (winnerFound) {
-      setWinner(winnerFound);
-      setGameState('winner');
-    }
-  };
-
-  // Gerenciador Universal de Timers (Desafio, Bônus, Votação)
+  // TIMERS: Fluxo Perfeito do Bônus
   useEffect(() => {
     if (challengeTimer > 0) {
       const timer = setTimeout(() => setChallengeTimer(prev => prev - 1), 1000);
@@ -82,13 +74,20 @@ export default function TVPage() {
       } else if (gameState === 'bonus_ask') {
         setGameState('playing');
         revelarEPassarVez(stateRef.current.pendingMove!, true, false);
+      } else if (gameState === 'bonus_speak') {
+        // Acabou o tempo de falar! Revela a carta e abre a votação.
+        setGameState('bonus_vote');
+        setChallengeTimer(10); // 10s para os outros votarem
+        setVotes([]);
+        setActionState('revealed'); 
+        setRevealSuccess(true); // Fica com borda verde pq ele acertou o ano
+        channelRef.current?.send({ type: 'broadcast', event: 'start-voting', payload: { playerName: stateRef.current.players[stateRef.current.currentPlayerIndex].name } });
       } else if (gameState === 'bonus_vote') {
         processarVotosBonus();
       }
     }
   }, [challengeTimer, gameState]);
 
-  // Câmera Perfeita
   useEffect(() => {
     if (mobileAction !== null) {
       const focarCamera = () => {
@@ -104,7 +103,6 @@ export default function TVPage() {
     }
   }, [mobileAction]);
 
-  // Antena Realtime Blindada
   useEffect(() => {
     if (!roomCode) return;
     const channel = supabase.channel(`room_${roomCode}`)
@@ -130,15 +128,13 @@ export default function TVPage() {
         setChallengeTimer(-1);
         resolverJogadaReal(stateRef.current.pendingMove.slotIndex, stateRef.current.pendingMove.playerIndex, payload.challengerName);
       })
-      // Novos Eventos de Bônus
       .on('broadcast', { event: 'bonus-response' }, ({ payload }) => {
         if (stateRef.current.gameState !== 'bonus_ask') return;
         setChallengeTimer(-1);
         if (payload.knows) {
-          setGameState('bonus_vote');
-          setChallengeTimer(7);
-          setVotes([]);
-          channel.send({ type: 'broadcast', event: 'start-voting', payload: { playerName: stateRef.current.players[stateRef.current.currentPlayerIndex].name } });
+          // O Cara disse que sabe! Dá 10 segundos pra ele falar.
+          setGameState('bonus_speak');
+          setChallengeTimer(10);
         } else {
           setGameState('playing');
           revelarEPassarVez(stateRef.current.pendingMove!, true, false);
@@ -161,7 +157,6 @@ export default function TVPage() {
     return () => { supabase.removeChannel(channel); };
   }, [roomCode]); 
 
-  // Trava Anti-Duplicação e Árvore de Decisão
   const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerName: string | null) => {
     if (resolvingRef.current) return; 
     resolvingRef.current = true;
@@ -174,9 +169,8 @@ export default function TVPage() {
     if (slotIndex > 0 && parseInt(activePlayer.timeline[slotIndex - 1].year) > targetYear) playerAcertou = false;
     if (slotIndex < activePlayer.timeline.length && parseInt(activePlayer.timeline[slotIndex].year) < targetYear) playerAcertou = false;
 
-    // Se acertou a posição e ninguém desafiou -> Vai para a Fase Bônus!
     if (playerAcertou && !challengerName) {
-      resolvingRef.current = false; // Destrava para poder processar o bônus depois
+      resolvingRef.current = false; 
       setGameState('bonus_ask');
       setChallengeTimer(5);
       channelRef.current?.send({ type: 'broadcast', event: 'ask-bonus', payload: { trackId: targetCard?.id } });
@@ -187,22 +181,38 @@ export default function TVPage() {
   };
 
   const processarVotosBonus = () => {
-    const { votes, players } = stateRef.current;
+    const { votes, players, targetCard, pendingMove } = stateRef.current;
     const sim = votes.filter(v => v.vote).length;
     const nao = votes.filter(v => !v.vote).length;
     const ganhouFicha = sim > nao;
 
+    let novosJogadores = [...players];
     if (ganhouFicha) {
-        setPlayers(prev => prev.map((p, i) => i === stateRef.current.currentPlayerIndex ? { ...p, tokens: p.tokens + 1 } : p));
+        novosJogadores[stateRef.current.currentPlayerIndex].tokens += 1;
         setStatusText(`PÚBLICO APROVOU! +1 FICHA PARA ${players[stateRef.current.currentPlayerIndex].name}`);
     } else {
         setStatusText("O PÚBLICO NEGOU SEU BÔNUS!");
     }
 
-    setGameState('playing');
+    setPlayers(novosJogadores);
+    setGameState('playing'); 
+
     setTimeout(() => {
-        revelarEPassarVez(stateRef.current.pendingMove!, true, false);
-    }, 2500);
+      let updated = [...stateRef.current.players];
+      const pIdx = pendingMove!.playerIndex;
+      updated[pIdx] = { ...updated[pIdx], timeline: [...updated[pIdx].timeline] };
+      updated[pIdx].timeline.splice(pendingMove!.slotIndex, 0, targetCard!);
+      updated[pIdx].score += 1;
+      
+      setPlayers(updated);
+      
+      if (updated.some(p => p.score >= 10)) {
+        setWinner(updated.find(p => p.score >= 10)!);
+        setGameState('winner');
+      } else {
+        iniciarTurno((pIdx + 1) % updated.length, updated);
+      }
+    }, 4500);
   };
 
   const revelarEPassarVez = ({ slotIndex, playerIndex }: {slotIndex: number, playerIndex: number}, playerAcertou: boolean, isChallenge: boolean, challengerName?: string | null) => {
@@ -212,7 +222,7 @@ export default function TVPage() {
 
     if (isChallenge) {
         const cIdx = players.findIndex(p => p.name === challengerName);
-        setPlayers(prev => prev.map((p, i) => i === cIdx ? { ...p, tokens: p.tokens - 1 } : p)); // Cobra a ficha
+        setPlayers(prev => prev.map((p, i) => i === cIdx ? { ...p, tokens: p.tokens - 1 } : p)); 
         if (!playerAcertou) { msg = `${challengerName} ROUBOU A CARTA!`; finalSuccess = true; }
         else { msg = `DESAFIO DE ${challengerName} FALHOU!`; finalSuccess = false; }
     } else {
@@ -220,7 +230,6 @@ export default function TVPage() {
         finalSuccess = playerAcertou;
     }
 
-    // Se veio de um bônus, não sobrescreve o texto de quem ganhou a ficha imediatamente
     if (stateRef.current.gameState !== 'bonus_vote') setStatusText(msg);
     
     if (!playerAcertou && !isChallenge) { pausarMusica(); tocarSomErro(); }
@@ -254,7 +263,6 @@ export default function TVPage() {
     }, 6000);
   };
 
-  // Algoritmo Fisher-Yates Original
   const criarSala = async () => {
     const { data } = await supabase.from('tracks').select('*');
     if (!data || data.length < 10) return alert("Acervo insuficiente!");
@@ -316,13 +324,12 @@ export default function TVPage() {
 
   const lidarComMusicaQuebrada = async (trackId: string) => {
     setBrokenTracks(prev => [...prev, trackId]);
-    setStatusText("ERRO DE CARREGAMENTO NO SPOTIFY. PULANDO...");
+    setStatusText("ERRO NO SPOTIFY. PULANDO...");
     setActionState('revealed'); 
     try { await supabase.from('tracks').update({ is_broken: true }).eq('id', trackId); } catch(e) {}
     setTimeout(() => iniciarTurno(stateRef.current.currentPlayerIndex), 3000);
   };
 
-  // Monitor de Silêncio do Spotify (Liniker Fix)
   const tocarMusica = async (trackId: string, retryCount = 0) => {
     const token = (session as any)?.accessToken;
     if (!token) return;
@@ -356,7 +363,6 @@ export default function TVPage() {
           return lidarComMusicaQuebrada(trackId);
       }
 
-      // Verificação dupla se a música realmente começou a tocar
       spotifyCheckRef.current = setTimeout(async () => {
         try {
             const check = await fetch('https://www.google.com/search?q=https://api.spotify.com/v1/playlists/%24', { headers: { 'Authorization': `Bearer ${token}` } });
@@ -494,9 +500,15 @@ export default function TVPage() {
           </div>
 
           <div className="flex-1 flex flex-col relative">
-            <div className={`w-full py-8 text-center z-20 transition-colors duration-500 ${gameState === 'challenge' ? 'bg-amber-500 text-black' : gameState === 'bonus_ask' || gameState === 'bonus_vote' ? 'bg-blue-600 text-white shadow-lg' : actionState === 'revealed' ? (revealSuccess ? 'bg-green-600' : 'bg-red-600') : 'bg-transparent'}`}>
+            {/* TÍTULOS DINÂMICOS NA TV */}
+            <div className={`w-full py-8 text-center z-20 transition-colors duration-500 ${gameState === 'challenge' ? 'bg-amber-500 text-black' : gameState === 'bonus_ask' || gameState === 'bonus_speak' || gameState === 'bonus_vote' ? 'bg-blue-600 text-white shadow-lg' : actionState === 'revealed' ? (revealSuccess ? 'bg-green-600' : 'bg-red-600') : 'bg-transparent'}`}>
               <h1 className="text-5xl font-black uppercase tracking-tighter">
-                {gameState === 'challenge' ? `DISCORDAR? (${challengeTimer}s)` : gameState === 'bonus_ask' ? `SABE O NOME DA MÚSICA? (${challengeTimer}s)` : gameState === 'bonus_vote' ? `VOTAÇÃO PÚBLICA! (${challengeTimer}s)` : actionState === 'revealed' ? statusText : `Vez de: ${players[currentPlayerIndex]?.name}`}
+                {gameState === 'challenge' ? `DISCORDAR? (${challengeTimer}s)` 
+                : gameState === 'bonus_ask' ? `SABE O NOME DA MÚSICA? (${challengeTimer}s)` 
+                : gameState === 'bonus_speak' ? `FALE O NOME E CANTOR! (${challengeTimer}s)` 
+                : gameState === 'bonus_vote' ? `VOTAÇÃO PÚBLICA! (${challengeTimer}s)` 
+                : actionState === 'revealed' ? statusText 
+                : `Vez de: ${players[currentPlayerIndex]?.name}`}
               </h1>
             </div>
 
