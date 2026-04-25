@@ -14,15 +14,10 @@ export default function MobilePage() {
   const [tokens, setTokens] = useState(1);
   const [gameState, setGameState] = useState<'lobby' | 'waiting' | 'playing' | 'challenge' | 'result'>('lobby');
   const [challengeTimer, setChallengeTimer] = useState(0);
-  const [holdProgress, setHoldProgress] = useState(0);
   
-  const holdTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const channelRef = useRef<any>(null);
-  
-  // A TIMELINE VOLTOU!
   const [timeline, setTimeline] = useState<Track[]>([]);
+  const channelRef = useRef<any>(null);
 
-  // Efeito para Reconnect Automático
   useEffect(() => {
     const savedName = localStorage.getItem('h_name');
     const savedRoom = localStorage.getItem('h_room');
@@ -32,14 +27,13 @@ export default function MobilePage() {
     }
   }, []);
 
-  const entrarNaSala = () => {
+  const entrarNaSala = (isReconnect = false) => {
     if (!name || !roomCode) return;
     
     const channel = supabase.channel(`room_${roomCode.toUpperCase()}`)
       .on('broadcast', { event: 'game-state' }, ({ payload }) => {
         const myTurn = payload.currentPlayer === name;
         setIsMyTurn(myTurn);
-        // Recebe a timeline completa com as imagens e salva no estado
         setTimeline(payload.playerTimeline);
         setGameState(myTurn ? 'playing' : 'waiting');
       })
@@ -56,12 +50,18 @@ export default function MobilePage() {
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         channel.send({ type: 'broadcast', event: 'join', payload: { name: name.toUpperCase() } });
+        
+        if (isReconnect) {
+            // Se for reconexão, avisa a TV pra mandar a timeline e o turno atual imediatamente
+            channel.send({ type: 'broadcast', event: 'request-sync', payload: { name: name.toUpperCase() } });
+            setReady(true);
+        }
         setJoined(true);
       }
     });
 
-    localStorage.setItem('h_name', name);
-    localStorage.setItem('h_room', roomCode);
+    localStorage.setItem('h_name', name.toUpperCase());
+    localStorage.setItem('h_room', roomCode.toUpperCase());
     channelRef.current = channel;
   };
 
@@ -86,33 +86,12 @@ export default function MobilePage() {
     setGameState('waiting');
   };
 
-  // Lógica de Segurar (Lock)
-  const startHold = (index: number) => {
-    setHoldProgress(0);
-    holdTimerRef.current = setInterval(() => {
-        setHoldProgress(prev => {
-            if (prev >= 100) {
-                clearInterval(holdTimerRef.current!);
-                enviarConfirmacaoFinal(index); // Trava a jogada
-                return 100;
-            }
-            return prev + 5;
-        });
-    }, 50);
-  };
-
-  const stopHold = () => {
-    if (holdTimerRef.current) clearInterval(holdTimerRef.current);
-    setHoldProgress(0);
-  };
-
   const discordar = () => {
     if (tokens <= 0 || isMyTurn) return;
     channelRef.current?.send({ type: 'broadcast', event: 'challenge-made', payload: { challengerName: name } });
     setGameState('waiting');
   };
 
-  // --- LOGIN ORIGINAL ---
   if (!joined) {
     return (
       <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center p-8">
@@ -131,13 +110,20 @@ export default function MobilePage() {
               <input placeholder="SALA" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())} className="w-full bg-zinc-900 border-2 border-zinc-800 p-5 rounded-3xl text-3xl font-black text-center tracking-widest focus:border-green-500 outline-none transition-all placeholder:text-zinc-700" />
             </div>
           </div>
-          <button onClick={entrarNaSala} className="w-full bg-white text-black font-black py-6 rounded-full text-2xl shadow-[0_20px_40px_rgba(255,255,255,0.1)] active:scale-95 transition-all">ENTRAR NA SALA</button>
+          
+          <div className="space-y-3">
+              <button onClick={() => entrarNaSala(false)} className="w-full bg-white text-black font-black py-6 rounded-full text-2xl shadow-[0_20px_40px_rgba(255,255,255,0.1)] active:scale-95 transition-all">ENTRAR NA SALA</button>
+              
+              {/* BOTÃO DE RECONNECT */}
+              {name && roomCode && (
+                  <button onClick={() => entrarNaSala(true)} className="w-full bg-green-500/10 text-green-500 border border-green-500/20 font-bold py-4 rounded-full text-sm active:scale-95 transition-all">RECONECTAR COMO {name}</button>
+              )}
+          </div>
         </div>
       </div>
     );
   }
 
-  // --- LOBBY ---
   if (!ready) {
     return (
       <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center p-8">
@@ -151,7 +137,6 @@ export default function MobilePage() {
   return (
     <div className={`min-h-screen flex flex-col p-6 transition-all duration-700 ${gameState === 'challenge' ? 'bg-amber-500 justify-center text-center' : 'bg-zinc-950 justify-start'}`}>
       
-      {/* ESPERANDO TURNO */}
       {gameState === 'waiting' && (
         <div className="flex-1 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
           <div className="w-16 h-16 border-4 border-zinc-800 border-t-green-500 rounded-full animate-spin mx-auto mb-6"></div>
@@ -162,31 +147,21 @@ export default function MobilePage() {
         </div>
       )}
 
-      {/* MINHA VEZ */}
       {gameState === 'playing' && isMyTurn && (
         <div className="w-full max-w-md mx-auto animate-in slide-in-from-bottom duration-500 pb-20 mt-4">
           <p className="text-zinc-500 font-black text-xs uppercase tracking-widest mb-6 text-center">Encaixe a Música</p>
-          
           <div className="flex flex-col gap-2">
             {timeline.map((track, i) => (
               <Fragment key={track.id}>
-                {/* BOTÃO DE ESPAÇO */}
+                {/* BOTÃO DO DUPLO CLIQUE ORIGINAL */}
                 <button 
-                  onPointerDown={() => { confirmarPosicao(i); startHold(i); }}
-                  onPointerUp={stopHold}
-                  onPointerLeave={stopHold}
-                  className="relative overflow-hidden w-full bg-zinc-900 border-2 border-dashed border-zinc-700 py-5 rounded-2xl text-zinc-500 font-black hover:border-green-500 transition-all flex items-center justify-center gap-3 shadow-lg select-none touch-none"
+                  onClick={() => confirmarPosicao(i)}
+                  onDoubleClick={() => enviarConfirmacaoFinal(i)}
+                  className="w-full bg-zinc-900 border-2 border-dashed border-zinc-700 py-5 rounded-2xl text-zinc-500 font-black hover:border-green-500 hover:text-green-500 active:bg-green-500 active:text-black transition-all flex items-center justify-center gap-3 shadow-lg"
                 >
-                  <div 
-                    className="absolute bottom-0 left-0 h-2 bg-green-500 transition-all duration-75" 
-                    style={{ width: `${holdProgress}%` }} 
-                  />
-                  <div className="relative z-10 flex items-center pointer-events-none">
-                    <div className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-lg leading-none">+</div>
-                  </div>
+                  <div className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-lg leading-none">+</div>
                 </button>
 
-                {/* CARTA DO ÁLBUM */}
                 <div className="bg-zinc-800 rounded-2xl p-3 flex items-center gap-4 shadow-xl border border-zinc-700">
                   <div className="bg-white text-black font-black px-3 py-1.5 rounded-xl text-xl shadow-inner">{track.year}</div>
                   <img src={track.imageUrl} alt={track.name} className="w-16 h-16 rounded-xl object-cover shadow-md" />
@@ -197,40 +172,31 @@ export default function MobilePage() {
                 </div>
               </Fragment>
             ))}
-
-            {/* ÚLTIMO BOTÃO DE ESPAÇO (Agora com Hold-to-Lock) */}
+            
+            {/* ÚLTIMO BOTÃO DO DUPLO CLIQUE ORIGINAL */}
             <button 
-              onPointerDown={() => { confirmarPosicao(timeline.length); startHold(timeline.length); }}
-              onPointerUp={stopHold}
-              onPointerLeave={stopHold}
-              className="relative overflow-hidden w-full bg-zinc-900 border-2 border-dashed border-zinc-700 py-5 rounded-2xl text-zinc-500 font-black hover:border-green-500 transition-all flex items-center justify-center gap-3 shadow-lg select-none touch-none"
+              onClick={() => confirmarPosicao(timeline.length)}
+              onDoubleClick={() => enviarConfirmacaoFinal(timeline.length)}
+              className="w-full bg-zinc-900 border-2 border-dashed border-zinc-700 py-5 rounded-2xl text-zinc-500 font-black hover:border-green-500 hover:text-green-500 active:bg-green-500 active:text-black transition-all flex items-center justify-center gap-3 shadow-lg"
             >
-              <div 
-                className="absolute bottom-0 left-0 h-2 bg-green-500 transition-all duration-75" 
-                style={{ width: `${holdProgress}%` }} 
-              />
-              <div className="relative z-10 flex items-center pointer-events-none">
-                <div className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-lg leading-none">+</div>
-              </div>
+              <div className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-lg leading-none">+</div>
             </button>
           </div>
 
           <div className="fixed bottom-0 left-0 w-full bg-gradient-to-t from-zinc-950 via-zinc-950 to-transparent p-6 pointer-events-none">
             <p className="text-[10px] text-zinc-400 font-bold uppercase text-center bg-zinc-900/90 backdrop-blur px-4 py-3 rounded-full border border-zinc-800 shadow-2xl mx-auto w-max pointer-events-auto">
-              1 Toque = Testar na TV &nbsp;•&nbsp; Segure = Confirmar
+              1 Toque = Testar na TV &nbsp;•&nbsp; 2 Toques = Confirmar
             </p>
           </div>
         </div>
       )}
 
-      {/* TELA DE DESAFIO (FICHAS) */}
       {gameState === 'challenge' && (
         <div className="w-full max-w-sm mx-auto flex flex-col items-center">
           <div className="mb-12">
             <h2 className="text-9xl font-black text-black leading-none">{challengeTimer}</h2>
             <p className="text-black font-black uppercase tracking-tighter text-xl mt-2">VOCÊ DISCORDA?</p>
           </div>
-          
           <button 
             onClick={discordar}
             disabled={tokens <= 0 || isMyTurn}
@@ -238,7 +204,6 @@ export default function MobilePage() {
           >
             DISCORDAR
           </button>
-          
           <div className="mt-12">
             <p className="text-black/40 font-bold text-xs uppercase mb-3 tracking-widest">Suas Fichas</p>
             <div className="flex justify-center gap-3">
@@ -256,7 +221,6 @@ export default function MobilePage() {
             <h2 className="text-5xl font-black text-white uppercase tracking-tighter italic">Olhe para a TV!</h2>
         </div>
       )}
-
     </div>
   );
 }

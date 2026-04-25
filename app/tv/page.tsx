@@ -99,7 +99,17 @@ export default function TVPage() {
       })
       .on('broadcast', { event: 'challenge-made' }, ({ payload }) => {
         processarDesafio(payload.challengerName);
-      });
+      })
+      .on('broadcast', { event: 'request-sync' }, ({ payload }) => {
+        // Quando o mobile cai e clica em Reconectar, a TV devolve o estado atual
+        const p = players.find(x => x.name === payload.name);
+        if (p && gameStarted) {
+            channel.send({
+                type: 'broadcast', event: 'game-state',
+                payload: { currentPlayer: players[currentPlayerIndex]?.name, playerTimeline: p.timeline, targetCard: targetCard }
+            });
+        }
+      })
 
     channel.subscribe();
     channelRef.current = channel;
@@ -241,17 +251,25 @@ const availableTracks = currentDeck.filter(t => !usedTrackIds.has(t.id));
   });
 };
 
-  const tocarMusica = async (trackId: string) => {
+  const tocarMusica = async (trackId: string, retryCount = 0) => {
     const token = (session as any)?.accessToken;
     if (!token) return;
     try {
       const devicesRes = await fetch('https://api.spotify.com/v1/me/player/devices', { headers: { 'Authorization': `Bearer ${token}` } });
       const devicesData = await devicesRes.json();
       const targetDevice = devicesData.devices?.find((d: any) => d.is_active) || devicesData.devices?.[0];
-      await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
+      
+      if (!targetDevice) return;
+
+      const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
         method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 40000 })
       });
+
+      // Se o Spotify ignorar o play (erro 404/403), tenta de novo 1 segundo depois
+      if (!res.ok && retryCount < 2) {
+         setTimeout(() => tocarMusica(trackId, retryCount + 1), 1000);
+      }
     } catch (e) {}
   };
 
@@ -418,12 +436,19 @@ const availableTracks = currentDeck.filter(t => !usedTrackIds.has(t.id));
                 <div id={`slot-${players[currentPlayerIndex]?.timeline.length}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === players[currentPlayerIndex]?.timeline.length ? 'w-48' : 'w-4'}`}>
                   {mobileAction === players[currentPlayerIndex]?.timeline.length && (
                     <div className={`absolute bottom-20 z-30 ${actionState === 'slotted' ? 'anim-drop' : ''} ${actionState === 'revealed' ? 'anim-flip' : ''}`}>
-                      {actionState === 'revealed' ? (
+                      {actionState === 'revealed' && revealSuccess ? (
                         <div className="flex flex-col items-center scale-110">
                           <div className="bg-white text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20 shadow-2xl">{targetCard?.year}</div>
-                          <img src={targetCard?.imageUrl} className="w-40 h-40 rounded-[2rem] border-4 border-zinc-500 object-cover" />
+                          <img src={targetCard?.imageUrl} className="w-40 h-40 rounded-[2rem] border-4 border-green-500 shadow-2xl object-cover" />
+                          {/* ESTA DIV ESTAVA FALTANDO NA ÚLTIMA CARTA! */}
+                          <div className="mt-4 text-center w-40">
+                             <p className="text-base italic text-zinc-300 truncate px-2">{targetCard?.name}</p>
+                             <p className="text-xs font-bold text-zinc-600 truncate uppercase tracking-tighter">{targetCard?.artist}</p>
+                          </div>
                         </div>
-                      ) : <CompactDisc />}
+                      ) : (
+                        <CompactDisc />
+                      )}
                     </div>
                   )}
                 </div>
