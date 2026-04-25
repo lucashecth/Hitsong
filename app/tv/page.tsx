@@ -1,12 +1,11 @@
 'use client';
 import { useEffect, useState, useRef, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
-import { useSession, signIn, signOut } from 'next-auth/react';
+import { useSession, signOut } from 'next-auth/react';
 
 interface Track { id: string; year: string; name: string; artist: string; imageUrl: string; isInitial?: boolean; }
 interface Player { name: string; isReady: boolean; score: number; timeline: Track[]; tokens: number; }
 
-// Componente do CD
 const CompactDisc = ({ large = false }) => (
   <div className={`${large ? 'w-32 h-32 border-[12px]' : 'w-24 h-24 border-[8px]'} rounded-full border-zinc-950 bg-gradient-to-tr from-purple-900 via-fuchsia-700 to-violet-900 shadow-[0_0_30px_rgba(168,85,247,0.3)] animate-[spin_4s_linear_infinite] flex items-center justify-center relative overflow-hidden flex-shrink-0`}>
     <div className="absolute inset-0 bg-[conic-gradient(from_0deg,transparent,rgba(255,255,255,0.3),rgba(236,72,153,0.2),rgba(56,189,248,0.2),rgba(255,255,255,0.3),transparent)] opacity-70 pointer-events-none mix-blend-screen"></div>
@@ -15,14 +14,13 @@ const CompactDisc = ({ large = false }) => (
 );
 
 export default function TVPage() {
-  const { data: session, status } = useSession();
+  const { data: session } = useSession();
   const [players, setPlayers] = useState<Player[]>([]);
   const [roomCode, setRoomCode] = useState<string>('');
   const [gameStarted, setGameStarted] = useState(false);
-  const [countdown, setCountdown] = useState<number | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+  const [usedTrackIds, setUsedTrackIds] = useState<Set<string>>(new Set());
 
-  // Estados de Jogo
   const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'winner'>('lobby');
   const [winner, setWinner] = useState<Player | null>(null);
   const [challengeTimer, setChallengeTimer] = useState(0);
@@ -36,26 +34,27 @@ export default function TVPage() {
   const [actionState, setActionState] = useState<'waiting' | 'slotted' | 'revealed'>('waiting');
   const [revealSuccess, setRevealSuccess] = useState<boolean | null>(null);
 
+  // --- O COFRE DE REFERÊNCIAS VIVAS (MATA OS BUGS DE CONEXÃO E DUPLICAÇÃO) ---
   const channelRef = useRef<any>(null);
-  const resolvingRef = useRef(false);
-
+  const resolvingRef = useRef(false); // Trava anti-duplicação de jogada
+  const stateRef = useRef({ players, currentPlayerIndex, targetCard, gameStarted, gameState, pendingMove });
+  
+  // Mantém o cofre sempre com a última versão dos dados a cada segundo sem reiniciar funções
+  useEffect(() => {
+    stateRef.current = { players, currentPlayerIndex, targetCard, gameStarted, gameState, pendingMove };
+  });
+  
   useEffect(() => { setIsMounted(true); }, []);
 
-  // --- LÓGICA DE SENHA PARA EDIÇÃO ---
   const irParaEdicao = () => {
     const senha = prompt("Digite a senha de editor:");
-    if (senha === "1234") { // Mude sua senha aqui
-        window.location.href = "/";
-    } else {
-        alert("Senha incorreta!");
-    }
+    if (senha === "1234") window.location.href = "/";
+    else alert("Senha incorreta!");
   };
 
   const getCorrectIndex = (timeline: Track[], targetYear: number) => {
     let index = 0;
-    while (index < timeline.length && parseInt(timeline[index].year) <= targetYear) {
-      index++;
-    }
+    while (index < timeline.length && parseInt(timeline[index].year) <= targetYear) index++;
     return index;
   };
 
@@ -67,17 +66,32 @@ export default function TVPage() {
     }
   };
 
-  // --- TIMER DO DESAFIO ---
   useEffect(() => {
     if (challengeTimer > 0) {
       const timer = setTimeout(() => setChallengeTimer(prev => prev - 1), 1000);
       return () => clearTimeout(timer);
     } else if (challengeTimer === 0 && gameState === 'challenge') {
-      finalizarTurnoSemDesafio();
+      const { pendingMove } = stateRef.current;
+      if (pendingMove) resolverJogadaReal(pendingMove.slotIndex, pendingMove.playerIndex, null);
     }
   }, [challengeTimer, gameState]);
 
-  // --- REALTIME ---
+  useEffect(() => {
+    if (mobileAction !== null) {
+      const focarCamera = () => {
+        const slot = document.getElementById(`slot-${mobileAction}`);
+        const container = document.getElementById('timeline-container');
+        if (slot && container) {
+          const scrollLeft = slot.offsetLeft - (container.clientWidth / 2) + (slot.clientWidth / 2);
+          container.scrollTo({ left: scrollLeft, behavior: 'smooth' });
+        }
+      };
+      setTimeout(focarCamera, 100); 
+      setTimeout(focarCamera, 700); 
+    }
+  }, [mobileAction]);
+
+  // --- A ANTENA BLINDADA (NUNCA DESLIGA) ---
   useEffect(() => {
     if (!roomCode) return;
     const channel = supabase.channel(`room_${roomCode}`)
@@ -95,48 +109,43 @@ export default function TVPage() {
         setActionState('slotted');
       })
       .on('broadcast', { event: 'confirm-play' }, ({ payload }) => {
-        iniciarJanelaDesafio(payload.slotIndex, currentPlayerIndex);
+        const { currentPlayerIndex, players } = stateRef.current;
+        setPendingMove({ slotIndex: payload.slotIndex, playerIndex: currentPlayerIndex });
+        setGameState('challenge');
+        setChallengeTimer(5);
+        pausarMusica();
+        channel.send({
+          type: 'broadcast', event: 'open-challenge',
+          payload: { timer: 5, playersTokens: players.map(p => ({ name: p.name, tokens: p.tokens })) }
+        });
       })
       .on('broadcast', { event: 'challenge-made' }, ({ payload }) => {
-        processarDesafio(payload.challengerName);
+        const { gameState, pendingMove } = stateRef.current;
+        if (gameState !== 'challenge' || !pendingMove) return;
+        setChallengeTimer(-1);
+        resolverJogadaReal(pendingMove.slotIndex, pendingMove.playerIndex, payload.challengerName);
+      })
+      .on('broadcast', { event: 'request-sync' }, ({ payload }) => {
+        const { players, currentPlayerIndex, targetCard, gameStarted } = stateRef.current;
+        const p = players.find(x => x.name === payload.name);
+        if (p && gameStarted) {
+            channel.send({
+                type: 'broadcast', event: 'game-state',
+                payload: { currentPlayer: players[currentPlayerIndex]?.name, playerTimeline: p.timeline, targetCard: targetCard }
+            });
+        }
       });
 
     channel.subscribe();
     channelRef.current = channel;
     return () => { supabase.removeChannel(channel); };
-  }, [roomCode, targetCard, players, currentPlayerIndex, gameState]);
-
-  const iniciarJanelaDesafio = (slotIndex: number, playerIndex: number) => {
-    setPendingMove({ slotIndex, playerIndex });
-    setGameState('challenge');
-    setChallengeTimer(5);
-    pausarMusica();
-
-    channelRef.current?.send({
-      type: 'broadcast',
-      event: 'open-challenge',
-      payload: { 
-        timer: 5,
-        playersTokens: players.map(p => ({ name: p.name, tokens: p.tokens }))
-      }
-    });
-  };
-
-  const finalizarTurnoSemDesafio = () => {
-    if (!pendingMove) return;
-    resolverJogadaReal(pendingMove.slotIndex, pendingMove.playerIndex, null);
-  };
-
-  const processarDesafio = (challengerName: string) => {
-    if (gameState !== 'challenge') return;
-    setChallengeTimer(-1);
-    resolverJogadaReal(pendingMove!.slotIndex, pendingMove!.playerIndex, challengerName);
-  };
+  }, [roomCode]); // <- Sem dependências soltas. A antena nunca vai ignorar um reconnect agora.
 
   const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerName: string | null) => {
-    if (resolvingRef.current) return; // <- SE JÁ ESTIVER RODANDO, IGNORA. Fim da duplicação!
-    resolvingRef.current = true; // <- Trava a porta.
+    if (resolvingRef.current) return; // TRAVA DE SEGURANÇA 1: Impede duplicação de cliques
+    resolvingRef.current = true;
 
+    const { players, targetCard } = stateRef.current; // Puxa dados do cofre
     const activePlayer = players[playerIndex];
     const targetYear = parseInt(targetCard!.year);
     
@@ -150,9 +159,7 @@ export default function TVPage() {
     if (challengerName) {
       const challengerIndex = novosJogadores.findIndex(p => p.name === challengerName);
       novosJogadores[challengerIndex].tokens -= 1;
-      if (!playerAcertou) {
-        acertouDeFato = true; 
-      }
+      if (!playerAcertou) acertouDeFato = true; 
     } else {
       if (playerAcertou) acertouDeFato = true;
     }
@@ -174,16 +181,15 @@ export default function TVPage() {
     setTimeout(() => {
       let jogadoresAtualizados = [...novosJogadores];
       
+      // TRAVA DE SEGURANÇA 2: Cópia profunda da timeline para o React não renderizar clones visuais
       if (challengerName && !playerAcertou) {
         const cIdx = jogadoresAtualizados.findIndex(p => p.name === challengerName);
-        // Cópia profunda da timeline antes de inserir a carta
         jogadoresAtualizados[cIdx] = { ...jogadoresAtualizados[cIdx], timeline: [...jogadoresAtualizados[cIdx].timeline] };
         
         const correctPos = getCorrectIndex(jogadoresAtualizados[cIdx].timeline, targetYear);
         jogadoresAtualizados[cIdx].timeline.splice(correctPos, 0, targetCard!);
         jogadoresAtualizados[cIdx].score += 1;
       } else if (playerAcertou) {
-        // Cópia profunda da timeline antes de inserir a carta
         jogadoresAtualizados[playerIndex] = { ...jogadoresAtualizados[playerIndex], timeline: [...jogadoresAtualizados[playerIndex].timeline] };
         
         jogadoresAtualizados[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
@@ -193,14 +199,13 @@ export default function TVPage() {
       setPlayers(jogadoresAtualizados);
       checkWinCondition(jogadoresAtualizados);
 
-      if (gameState !== 'winner') {
+      if (stateRef.current.gameState !== 'winner') {
         const next = (playerIndex + 1) % players.length;
         iniciarTurno(next, jogadoresAtualizados, deck);
       }
     }, 6000);
   };
 
-  // --- FUNÇÕES DE APOIO ---
   const criarSala = async () => {
     const { data } = await supabase.from('tracks').select('*');
     if (!data || data.length < 10) return alert("Acervo insuficiente!");
@@ -219,40 +224,56 @@ export default function TVPage() {
   };
 
   const iniciarTurno = (playerIndex: number, currentPlayers: Player[], currentDeck: Track[]) => {
-    resolvingRef.current = false;
+    resolvingRef.current = false; // DESTRAVA PARA O PRÓXIMO TURNO
     setActionState('waiting');
     setRevealSuccess(null);
     setMobileAction(null);
-    if (currentDeck.length < 1) return;
-    const target = currentDeck.pop()!;
-    setDeck(currentDeck);
+
+    const availableTracks = currentDeck.filter(t => !usedTrackIds.has(t.id));
+    if (availableTracks.length < 1) return alert("Acervo esgotado!");
+    
+    const target = availableTracks.pop()!;
+    setUsedTrackIds(prev => new Set(prev).add(target.id)); 
+    setDeck(currentDeck.filter(t => t.id !== target.id));
     setCurrentPlayerIndex(playerIndex);
     setTargetCard(target);
     tocarMusica(target.id);
+    
     channelRef.current?.send({
       type: 'broadcast', event: 'game-state',
-      payload: { currentPlayer: currentPlayers[playerIndex].name, playerTimeline: currentPlayers[playerIndex].timeline, targetCard: { id: target.id } }
+      payload: { currentPlayer: currentPlayers[playerIndex].name, playerTimeline: currentPlayers[playerIndex].timeline, targetCard: target }
     });
   };
 
-  const tocarMusica = async (trackId: string) => {
+  // --- ANTIFALHAS DO SPOTIFY (TENTA 3 VEZES SE DER ERRO) ---
+  const tocarMusica = async (trackId: string, retryCount = 0) => {
     const token = (session as any)?.accessToken;
     if (!token) return;
     try {
       const devicesRes = await fetch('https://api.spotify.com/v1/me/player/devices', { headers: { 'Authorization': `Bearer ${token}` } });
       const devicesData = await devicesRes.json();
       const targetDevice = devicesData.devices?.find((d: any) => d.is_active) || devicesData.devices?.[0];
-      await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
+      
+      if (!targetDevice) {
+         if (retryCount < 3) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+         return;
+      }
+
+      const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
         method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 40000 })
       });
-    } catch (e) {}
+
+      if (!res.ok && retryCount < 3) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+    } catch (e) {
+      if (retryCount < 3) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+    }
   };
 
   const pausarMusica = async () => {
     const token = (session as any)?.accessToken;
     if (!token) return;
-    await fetch('https://api.spotify.com/v1/me/player/play?device_id=...', { method: 'PUT', headers: { 'Authorization': `Bearer ${token}` } });
+    await fetch('https://api.spotify.com/v1/me/player/pause', { method: 'PUT', headers: { 'Authorization': `Bearer ${token}` } });
   };
 
   const tocarSomErro = () => {
@@ -270,7 +291,6 @@ export default function TVPage() {
 
   if (!isMounted) return null;
 
-  // --- TELA DE VITORIA ---
   if (gameState === 'winner' && winner) {
     const ranking = [...players].sort((a, b) => b.score - a.score);
     return (
@@ -280,11 +300,7 @@ export default function TVPage() {
             .confetti { position: absolute; width: 10px; height: 10px; animation: fall 4s linear infinite; }
         `}</style>
         {[...Array(40)].map((_, i) => (
-          <div key={i} className="confetti" style={{ 
-            left: `${Math.random() * 100}%`, 
-            animationDelay: `${Math.random() * 5}s`,
-            backgroundColor: i % 2 === 0 ? '#22c55e' : '#a855f7'
-          }} />
+          <div key={i} className="confetti" style={{ left: `${Math.random() * 100}%`, animationDelay: `${Math.random() * 5}s`, backgroundColor: i % 2 === 0 ? '#22c55e' : '#a855f7' }} />
         ))}
         <div className="text-center mb-10">
           <h1 className="text-xl font-black text-zinc-500 uppercase tracking-widest">Campeão</h1>
@@ -310,7 +326,6 @@ export default function TVPage() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-zinc-950 text-white font-sans overflow-hidden relative">
-      {/* Background Mesh */}
       <div className="absolute inset-0 opacity-20 pointer-events-none z-0">
         <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-purple-600 blur-[120px] animate-pulse"></div>
         <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-blue-600 blur-[120px] animate-pulse" style={{ animationDelay: '2s' }}></div>
@@ -334,7 +349,7 @@ export default function TVPage() {
         <div className="flex items-center gap-6">
           <button onClick={irParaEdicao} className="text-[10px] bg-zinc-800 px-3 py-1 rounded hover:bg-zinc-700">EDITAR ACERVO</button>
           {roomCode && <span className="text-sm font-black text-white bg-zinc-800 px-4 py-1.5 rounded-full border border-zinc-700">SALA: {roomCode}</span>}
-          <a href="https://hitsong.vercel.app/api/auth/callback/spotify" className="text-[10px] font-bold text-green-500 border border-green-500/20 px-3 py-1 rounded-md">RECONECTAR</a>
+          <a href="https://hitsong.vercel.app/api/auth/callback/spotify" className="text-[10px] font-bold text-green-500 border border-green-500/20 px-3 py-1 rounded-md">RECONECTAR SPOTIFY</a>
           <button onClick={() => signOut({ callbackUrl: '/tv' })} className="text-[10px] font-bold text-zinc-500">SAIR</button>
         </div>
       </div>
@@ -361,13 +376,12 @@ export default function TVPage() {
         </div>
       ) : (
         <div className="flex flex-1 relative overflow-hidden z-10">
-          {/* PLACAR LATERAL */}
+          
           <div className="w-28 bg-zinc-900/30 backdrop-blur-xl border-r border-zinc-800/50 flex flex-col items-center py-10 gap-6 z-40 flex-shrink-0">
             {players.map((p, i) => (
               <div key={i} className={`relative w-16 h-16 rounded-2xl flex flex-col items-center justify-center transition-all duration-500 ${i === currentPlayerIndex ? 'bg-white text-black scale-110' : 'bg-zinc-800/50 text-zinc-500'}`}>
                 <span className="text-xs font-bold uppercase mb-[-2px]">{p.name.substring(0,3)}</span>
                 <span className="text-2xl font-black">{p.score}</span>
-                {/* Visual das Fichas */}
                 <div className="absolute -bottom-2 flex gap-1">
                     {[...Array(p.tokens)].map((_, t) => <div key={t} className="w-2 h-2 bg-amber-400 rounded-full shadow-[0_0_5px_rgba(251,191,36,0.8)]" />)}
                 </div>
@@ -376,8 +390,7 @@ export default function TVPage() {
           </div>
 
           <div className="flex-1 flex flex-col relative">
-            {/* STATUS DO TURNO / DESAFIO */}
-            <div className={`w-full py-8 text-center z-20 ${gameState === 'challenge' ? 'bg-amber-500 text-black' : actionState === 'revealed' ? (revealSuccess ? 'bg-green-600' : 'bg-red-600') : 'bg-transparent'}`}>
+            <div className={`w-full py-8 text-center z-20 transition-colors duration-500 ${gameState === 'challenge' ? 'bg-amber-500 text-black' : actionState === 'revealed' ? (revealSuccess ? 'bg-green-600' : 'bg-red-600') : 'bg-transparent'}`}>
               <h1 className="text-5xl font-black uppercase tracking-tighter">
                 {gameState === 'challenge' ? `DISCORDAR? (${challengeTimer}s)` : actionState === 'revealed' ? (revealSuccess ? 'ACERTOU!' : 'ERROU!') : `Vez de: ${players[currentPlayerIndex]?.name}`}
               </h1>
@@ -386,41 +399,60 @@ export default function TVPage() {
             {actionState === 'waiting' && <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-10"><CompactDisc large /></div>}
 
             <div id="timeline-container" className="absolute bottom-0 w-full overflow-x-auto no-scrollbar pb-12 pt-40 z-10 scroll-smooth">
-              <div className="flex items-end h-[24rem] w-max px-[40vw] gap-4 mx-auto">
+              <div className="flex items-end h-[24rem] w-max gap-4 mx-auto">
+                
+                <div className="w-[40vw] flex-shrink-0 pointer-events-none"></div>
+
                 {players[currentPlayerIndex]?.timeline.map((track, i) => (
                   <Fragment key={track.id}>
-                    <div id={`slot-${i}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === i ? 'w-48' : 'w-4'}`}>
+                    <div id={`slot-${i}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === i ? 'w-64' : 'w-4'}`}>
                       {mobileAction === i && (
                         <div className={`absolute bottom-20 z-30 ${actionState === 'slotted' ? 'anim-drop' : ''} ${actionState === 'revealed' ? 'anim-flip' : ''}`}>
                           {actionState === 'revealed' ? (
                             <div className="flex flex-col items-center scale-110">
                               <div className="bg-white text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20 shadow-2xl">{targetCard?.year}</div>
-                              <img src={targetCard?.imageUrl} className="w-40 h-40 rounded-[2rem] border-4 border-zinc-500 object-cover" />
-                              <div className="mt-4 text-center w-40"><p className="text-sm italic text-zinc-300">{targetCard?.name}</p><p className="text-xs font-bold text-zinc-500">{targetCard?.artist}</p></div>
+                              <img src={targetCard?.imageUrl} className={`w-40 h-40 rounded-[2rem] border-4 shadow-2xl object-cover transition-all ${revealSuccess ? 'border-green-500' : 'border-red-600 grayscale opacity-80'}`} />
+                              <div className="mt-4 text-center w-40">
+                                <p className="text-base italic text-zinc-300 truncate px-2">{targetCard?.name}</p>
+                                <p className="text-xs font-bold text-zinc-600 truncate uppercase tracking-tighter">{targetCard?.artist}</p>
+                              </div>
                             </div>
-                          ) : <CompactDisc />}
+                          ) : (
+                            <CompactDisc />
+                          )}
                         </div>
                       )}
                     </div>
+                    
                     <div className="flex flex-col items-center flex-shrink-0 z-20">
                       <div className="bg-zinc-100 text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20">{track.year}</div>
-                      <img src={track.imageUrl} className={`w-44 h-44 rounded-[2.5rem] border-4 ${track.isInitial ? 'border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.4)]' : 'border-zinc-800'}`} />
+                      <img src={track.imageUrl} className={`w-44 h-44 rounded-[2.5rem] border-4 ${track.isInitial ? 'border-amber-400 shadow-[0_0_40px_rgba(251,191,36,0.5)]' : 'border-zinc-800'}`} />
                       <div className="mt-4 text-center w-44"><p className="text-sm italic text-zinc-400">{track.name}</p><p className="text-xs font-bold text-zinc-600">{track.artist}</p></div>
                     </div>
                   </Fragment>
                 ))}
-                <div id={`slot-${players[currentPlayerIndex]?.timeline.length}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === players[currentPlayerIndex]?.timeline.length ? 'w-48' : 'w-4'}`}>
+
+                <div id={`slot-${players[currentPlayerIndex]?.timeline.length}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === players[currentPlayerIndex]?.timeline.length ? 'w-64' : 'w-4'}`}>
                   {mobileAction === players[currentPlayerIndex]?.timeline.length && (
                     <div className={`absolute bottom-20 z-30 ${actionState === 'slotted' ? 'anim-drop' : ''} ${actionState === 'revealed' ? 'anim-flip' : ''}`}>
                       {actionState === 'revealed' ? (
                         <div className="flex flex-col items-center scale-110">
                           <div className="bg-white text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20 shadow-2xl">{targetCard?.year}</div>
-                          <img src={targetCard?.imageUrl} className="w-40 h-40 rounded-[2rem] border-4 border-zinc-500 object-cover" />
+                          <img src={targetCard?.imageUrl} className={`w-40 h-40 rounded-[2rem] border-4 shadow-2xl object-cover transition-all ${revealSuccess ? 'border-green-500' : 'border-red-600 grayscale opacity-80'}`} />
+                          <div className="mt-4 text-center w-40">
+                             <p className="text-base italic text-zinc-300 truncate px-2">{targetCard?.name}</p>
+                             <p className="text-xs font-bold text-zinc-600 truncate uppercase tracking-tighter">{targetCard?.artist}</p>
+                          </div>
                         </div>
-                      ) : <CompactDisc />}
+                      ) : (
+                        <CompactDisc />
+                      )}
                     </div>
                   )}
                 </div>
+
+                <div className="w-[40vw] flex-shrink-0 pointer-events-none"></div>
+
               </div>
             </div>
           </div>
