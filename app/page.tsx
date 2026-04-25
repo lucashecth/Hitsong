@@ -3,31 +3,44 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
+import { supabase } from '@/lib/supabase'; // Certifique-se de que o caminho está correto
 
 interface Track {
   id: string;
   year: string;
   name: string;
   artist: string;
-  imageUrl: string; 
+  imageUrl: string;
+  cadastrado_por?: string; // Novo campo
 }
 
 export default function Home() {
   const router = useRouter();
-  const { data: session, status } = useSession();
+  const { data: session } = useSession();
   
   const [inputUrl, setInputUrl] = useState('');
   const [parsedTracks, setParsedTracks] = useState<Track[]>([]);
   const [savedTracks, setSavedTracks] = useState<Track[]>([]);
-  const [searchTerm, setSearchTerm] = useState(''); // Estado da barra de busca
+  const [searchTerm, setSearchTerm] = useState('');
   const [isFetching, setIsFetching] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // --- EFEITO QUE CARREGA O ACERVO GLOBAL DO SUPABASE ---
   useEffect(() => {
-    const saved = localStorage.getItem('hitster_deck');
-    if (saved) {
-      setSavedTracks(JSON.parse(saved));
-    }
+    const carregarAcervoGlobal = async () => {
+      const { data, error } = await supabase
+        .from('tracks')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error("Erro ao carregar banco:", error.message);
+      } else if (data) {
+        setSavedTracks(data);
+      }
+    };
+
+    carregarAcervoGlobal();
   }, []);
 
   const buscarDoSpotify = async () => {
@@ -37,12 +50,12 @@ export default function Home() {
     
     const token = (session as any)?.accessToken;
     if (!token) {
-      setErrorMsg('Conecte o Spotify na TV primeiro.');
+      setErrorMsg('Conecte o Spotify na TV primeiro ou faça login.');
       setIsFetching(false);
       return;
     }
 
-    const links = inputUrl.split(/\s+/).filter(link => link.includes('open.spotify.com'));
+    const links = inputUrl.split(/\s+/).filter(link => link.includes('spotify.com'));
     if (links.length === 0) {
       setErrorMsg('Nenhum link válido do Spotify encontrado.');
       setIsFetching(false);
@@ -82,7 +95,8 @@ export default function Home() {
                 year: item.track.album.release_date.substring(0, 4),
                 name: item.track.name,
                 artist: item.track.artists[0].name,
-                imageUrl: item.track.album.images[0]?.url || ''
+                imageUrl: item.track.album.images[0]?.url || '',
+                cadastrado_por: session?.user?.name || 'Anônimo' // Já identifica quem buscou
               });
             }
           });
@@ -90,12 +104,20 @@ export default function Home() {
           const albumYear = data.release_date.substring(0, 4);
           const albumImage = data.images[0]?.url || '';
           data.tracks.items.forEach((track: any) => {
-            novasCartasEncontradas.push({ id: track.id, year: albumYear, name: track.name, artist: track.artists[0].name, imageUrl: albumImage });
+            novasCartasEncontradas.push({ 
+                id: track.id, 
+                year: albumYear, 
+                name: track.name, 
+                artist: track.artists[0].name, 
+                imageUrl: albumImage,
+                cadastrado_por: session?.user?.name || 'Anônimo'
+            });
           });
         } else if (type === 'track') {
           novasCartasEncontradas.push({
             id: data.id, year: data.album.release_date.substring(0, 4),
-            name: data.name, artist: data.artists[0].name, imageUrl: data.album.images[0]?.url || ''
+            name: data.name, artist: data.artists[0].name, imageUrl: data.album.images[0]?.url || '',
+            cadastrado_por: session?.user?.name || 'Anônimo'
           });
         }
       }
@@ -112,25 +134,39 @@ export default function Home() {
     }
   };
 
-  const saveDeck = () => {
-    const combined = [...savedTracks, ...parsedTracks];
-    const unique = Array.from(new Map(combined.map(item => [item.id, item])).values());
-    localStorage.setItem('hitster_deck', JSON.stringify(unique));
-    setSavedTracks(unique);
-    setParsedTracks([]);
+  // --- GRAVAR NO SUPABASE (GLOBAL) ---
+  const saveDeck = async () => {
+    if (parsedTracks.length === 0) return;
+
+    const { error } = await supabase
+      .from('tracks')
+      .upsert(parsedTracks, { onConflict: 'id' });
+
+    if (error) {
+      alert("Erro ao gravar no banco: " + error.message);
+    } else {
+      alert(`${parsedTracks.length} músicas adicionadas ao acervo global!`);
+      setSavedTracks(prev => [...parsedTracks, ...prev]);
+      setParsedTracks([]);
+    }
   };
 
   const removerDoPreview = (id: string) => {
     setParsedTracks(prev => prev.filter(t => t.id !== id));
   };
 
-  const removerDoAcervo = (id: string) => {
-    const novoAcervo = savedTracks.filter(t => t.id !== id);
-    localStorage.setItem('hitster_deck', JSON.stringify(novoAcervo));
-    setSavedTracks(novoAcervo);
+  const removerDoAcervo = async (id: string) => {
+    if (!confirm('Deseja remover esta música do acervo GLOBAL?')) return;
+    
+    const { error } = await supabase.from('tracks').delete().eq('id', id);
+    
+    if (error) {
+      alert("Erro ao deletar: " + error.message);
+    } else {
+      setSavedTracks(prev => prev.filter(t => t.id !== id));
+    }
   };
 
-  // Lógica de filtro: verifica se o termo digitado está no nome, artista ou ano
   const filteredSavedTracks = savedTracks.filter(track => 
     track.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     track.artist.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -140,7 +176,10 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-zinc-950 text-white font-sans p-8">
       <header className="max-w-7xl mx-auto flex justify-between items-center mb-10 border-b border-zinc-800 pb-6">
-        <h1 className="text-4xl font-black tracking-tighter">Hitster <span className="text-green-500">Digital</span></h1>
+        <div>
+            <h1 className="text-4xl font-black tracking-tighter">Hitster <span className="text-green-500">Digital</span></h1>
+            <p className="text-zinc-500 text-xs font-bold uppercase mt-1">Acervo Comunitário</p>
+        </div>
         <button onClick={() => router.push('/tv')} className="bg-white text-black font-bold px-6 py-2 rounded-full hover:scale-105 transition-all">Hospedar Jogo</button>
       </header>
 
@@ -149,57 +188,50 @@ export default function Home() {
         {/* COLUNA 1: INPUT */}
         <div className="flex flex-col gap-6">
           <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-3xl shadow-xl">
-            <h2 className="text-xl font-bold mb-4">Adicionar Links</h2>
+            <h2 className="text-xl font-bold mb-4">Alimentar Banco</h2>
             <textarea 
               value={inputUrl}
               onChange={(e) => setInputUrl(e.target.value)}
-              placeholder="Cole os links de Músicas, Playlists ou Álbuns aqui..."
+              placeholder="Cole os links do Spotify..."
               className="w-full h-32 bg-zinc-950 border border-zinc-700 rounded-2xl p-4 text-sm focus:border-green-500 focus:outline-none resize-none"
             />
             <button onClick={buscarDoSpotify} disabled={isFetching} className="w-full mt-4 bg-blue-600 font-bold py-3 rounded-xl hover:bg-blue-500 transition-all disabled:opacity-50">
-              {isFetching ? 'Buscando...' : 'Buscar Músicas'}
+              {isFetching ? 'Buscando...' : 'Verificar Links'}
             </button>
             {errorMsg && <p className="text-red-500 text-xs mt-2">{errorMsg}</p>}
           </div>
 
           <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-3xl flex justify-between items-center">
             <div>
-              <p className="text-zinc-500 text-xs uppercase font-bold">Total no Acervo</p>
-              <p className="text-4xl font-black">{savedTracks.length}</p>
+              <p className="text-zinc-500 text-xs uppercase font-bold">Total Global</p>
+              <p className="text-4xl font-black text-green-500">{savedTracks.length}</p>
             </div>
-            <button onClick={() => { if(confirm('Zerar acervo?')) { localStorage.removeItem('hitster_deck'); setSavedTracks([]); } }} className="text-red-500 text-sm font-bold">LIMPAR TUDO</button>
+            <div className="text-right">
+                <p className="text-[10px] text-zinc-600 font-bold mb-1 italic">Olá, {session?.user?.name || 'Visitante'}</p>
+            </div>
           </div>
         </div>
 
-        {/* COLUNA 2: PREVIEW (SALA DE ESPERA) */}
+        {/* COLUNA 2: PREVIEW */}
         <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-3xl shadow-xl flex flex-col max-h-[70vh]">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-bold">Na fila ({parsedTracks.length})</h2>
-            <button onClick={saveDeck} disabled={parsedTracks.length === 0} className="text-green-500 font-bold text-sm hover:underline disabled:opacity-30">GRAVAR TUDO</button>
+            <h2 className="text-xl font-bold">Novas ({parsedTracks.length})</h2>
+            <button onClick={saveDeck} disabled={parsedTracks.length === 0} className="bg-green-500 text-black px-4 py-1 rounded-full font-black text-xs hover:scale-105 disabled:opacity-30 transition-all">GRAVAR NO BANCO</button>
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-            {parsedTracks.map((track, i) => {
-              // Verifica se a música já existe no acervo salvo
+            {parsedTracks.map((track) => {
               const isDupe = savedTracks.some(t => t.id === track.id);
-              
               return (
                 <div key={track.id} className={`bg-zinc-950 p-3 rounded-xl flex items-center justify-between border transition-all ${isDupe ? 'border-red-900/50 opacity-40 grayscale' : 'border-zinc-800 hover:border-zinc-600'}`}>
-                  <div className="flex items-center gap-4 truncate">
-                    {track.imageUrl ? (
-                      <img src={track.imageUrl} className="w-10 h-10 rounded shadow-lg object-cover" alt="" />
-                    ) : (
-                      <div className="w-10 h-10 bg-zinc-800 rounded flex items-center justify-center"><span className="text-[10px] text-zinc-500">Sem foto</span></div>
-                    )}
+                  <div className="flex items-center gap-3 truncate">
+                    <img src={track.imageUrl} className="w-10 h-10 rounded shadow-lg object-cover" alt="" />
                     <div className="truncate">
-                      <div className="flex items-center gap-2">
-                        <p className="text-xs font-bold truncate">{track.name}</p>
-                        {isDupe && <span className="text-[9px] bg-red-900 text-red-200 px-2 py-0.5 rounded font-bold uppercase tracking-widest">Já está no acervo</span>}
-                      </div>
-                      <p className="text-[10px] text-zinc-500 truncate">{track.artist} • {track.year}</p>
+                      <p className="text-xs font-bold truncate">{track.name}</p>
+                      <p className="text-[10px] text-zinc-500">{track.artist} • {track.year}</p>
                     </div>
                   </div>
-                  <button onClick={() => removerDoPreview(track.id)} className="text-zinc-700 hover:text-red-500 transition-colors p-1">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  <button onClick={() => removerDoPreview(track.id)} className="text-zinc-700 hover:text-red-500 p-1">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                   </button>
                 </div>
               );
@@ -207,52 +239,41 @@ export default function Home() {
           </div>
         </div>
 
-        {/* COLUNA 3: ACERVO SALVO */}
+        {/* COLUNA 3: ACERVO GLOBAL */}
         <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-3xl shadow-xl flex flex-col max-h-[70vh]">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-bold">Acervo Gravado</h2>
-            <span className="text-xs font-bold text-zinc-500 bg-zinc-800 px-2 py-1 rounded">{filteredSavedTracks.length} cartas</span>
-          </div>
-
-          {/* BARRA DE PESQUISA AQUI */}
-          <div className="mb-4">
+            <h2 className="text-xl font-bold">Acervo Global</h2>
             <input 
               type="text" 
-              placeholder="Buscar música, artista ou ano..." 
+              placeholder="Busca..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-sm focus:border-green-500 focus:outline-none text-zinc-300 placeholder-zinc-600"
+              className="w-24 bg-zinc-950 border border-zinc-800 rounded-lg p-1 text-[10px] focus:border-green-500 outline-none"
             />
           </div>
 
-          {savedTracks.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center border-2 border-dashed border-zinc-800 rounded-xl">
-              <p className="text-zinc-600 text-sm text-center px-4">Suas cartas aparecerão aqui após gravar.</p>
-            </div>
-          ) : filteredSavedTracks.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center border-2 border-dashed border-zinc-800 rounded-xl">
-              <p className="text-zinc-600 text-sm text-center px-4">Nenhuma música encontrada para "{searchTerm}".</p>
-            </div>
-          ) : (
-            <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-              {filteredSavedTracks.map(track => (
-                <div key={track.id} className="bg-zinc-800/30 p-3 rounded-xl flex items-center gap-3 border border-zinc-700/50 group hover:border-zinc-600 transition-colors">
-                  {track.imageUrl ? (
+          <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+            {filteredSavedTracks.map(track => (
+              <div key={track.id} className="bg-zinc-800/30 p-3 rounded-xl flex flex-col gap-2 border border-zinc-700/50 group">
+                <div className="flex items-center gap-3">
                     <img src={track.imageUrl} className="w-10 h-10 rounded opacity-70 object-cover" alt="" />
-                  ) : (
-                    <div className="w-10 h-10 bg-zinc-800 rounded flex items-center justify-center opacity-70"><span className="text-[10px] text-zinc-500">Sem foto</span></div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate text-zinc-300">{track.name}</p>
-                    <p className="text-[10px] text-zinc-600 truncate">{track.artist} • {track.year}</p>
-                  </div>
-                  <button onClick={() => removerDoAcervo(track.id)} className="text-zinc-700 hover:text-red-500 p-1">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                  </button>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate text-zinc-300">{track.name}</p>
+                        <p className="text-[10px] text-zinc-600 truncate">{track.artist} • {track.year}</p>
+                    </div>
+                    <button onClick={() => removerDoAcervo(track.id)} className="opacity-0 group-hover:opacity-100 text-zinc-700 hover:text-red-500 transition-all p-1">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
                 </div>
-              ))}
-            </div>
-          )}
+                {/* TAG DE QUEM CADASTROU */}
+                <div className="flex justify-end">
+                    <span className="text-[8px] bg-zinc-900 text-zinc-500 px-2 py-0.5 rounded-full border border-zinc-800">
+                        Curador: <span className="text-blue-400">{track.cadastrado_por || 'Antigo'}</span>
+                    </span>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
       </main>
