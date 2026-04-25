@@ -1,6 +1,8 @@
 'use client';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
+
+interface Track { id: string; year: string; name: string; artist: string; imageUrl: string; }
 
 export default function MobilePage() {
   const [name, setName] = useState('');
@@ -12,24 +14,24 @@ export default function MobilePage() {
   const [tokens, setTokens] = useState(1);
   const [gameState, setGameState] = useState<'lobby' | 'waiting' | 'playing' | 'challenge' | 'result'>('lobby');
   const [challengeTimer, setChallengeTimer] = useState(0);
-  const [timelineSize, setTimelineSize] = useState(0);
+  
+  // A TIMELINE VOLTOU!
+  const [timeline, setTimeline] = useState<Track[]>([]);
   
   const channelRef = useRef<any>(null);
 
-  // --- ENTRAR NA SALA ---
   const entrarNaSala = () => {
     if (!name || !roomCode) return;
     
     const channel = supabase.channel(`room_${roomCode.toUpperCase()}`)
       .on('broadcast', { event: 'game-state' }, ({ payload }) => {
-        // Quando a TV manda o estado do jogo, a partida começou!
         const myTurn = payload.currentPlayer === name;
         setIsMyTurn(myTurn);
-        setTimelineSize(payload.playerTimeline.length);
+        // Recebe a timeline completa com as imagens e salva no estado
+        setTimeline(payload.playerTimeline);
         setGameState(myTurn ? 'playing' : 'waiting');
       })
       .on('broadcast', { event: 'open-challenge' }, ({ payload }) => {
-        // Alguém jogou, abre a tela de Discordar
         const myData = payload.playersTokens.find((p: any) => p.name === name);
         if (myData) setTokens(myData.tokens);
         setChallengeTimer(payload.timer);
@@ -54,7 +56,6 @@ export default function MobilePage() {
     setReady(true);
   };
 
-  // Cronômetro do desafio
   useEffect(() => {
     if (challengeTimer > 0) {
       const timer = setTimeout(() => setChallengeTimer(prev => prev - 1), 1000);
@@ -62,7 +63,6 @@ export default function MobilePage() {
     }
   }, [challengeTimer]);
 
-  // Funções de Ação
   const confirmarPosicao = (index: number) => {
     channelRef.current?.send({ type: 'broadcast', event: 'mobile-action', payload: { slotIndex: index } });
   };
@@ -78,7 +78,7 @@ export default function MobilePage() {
     setGameState('waiting');
   };
 
-  // --- INTERFACE DE LOGIN (A BONITONA) ---
+  // --- LOGIN ORIGINAL ---
   if (!joined) {
     return (
       <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center p-8">
@@ -87,62 +87,39 @@ export default function MobilePage() {
             <h1 className="text-5xl font-black tracking-tighter mb-2">HITSTER</h1>
             <p className="text-green-500 font-bold tracking-[0.3em] uppercase text-xs">Controle Remoto</p>
           </div>
-
           <div className="space-y-4">
             <div className="space-y-2">
               <label className="text-[10px] font-black text-zinc-500 uppercase ml-4">Quem está jogando?</label>
-              <input 
-                placeholder="NOME OU APELIDO" 
-                value={name} 
-                onChange={e => setName(e.target.value.toUpperCase())} 
-                className="w-full bg-zinc-900 border-2 border-zinc-800 p-5 rounded-3xl text-xl font-bold focus:border-green-500 outline-none transition-all placeholder:text-zinc-700" 
-              />
+              <input placeholder="NOME OU APELIDO" value={name} onChange={e => setName(e.target.value.toUpperCase())} className="w-full bg-zinc-900 border-2 border-zinc-800 p-5 rounded-3xl text-xl font-bold focus:border-green-500 outline-none transition-all placeholder:text-zinc-700" />
             </div>
-            
             <div className="space-y-2">
               <label className="text-[10px] font-black text-zinc-500 uppercase ml-4">Código na TV</label>
-              <input 
-                placeholder="SALA" 
-                value={roomCode} 
-                onChange={e => setRoomCode(e.target.value.toUpperCase())} 
-                className="w-full bg-zinc-900 border-2 border-zinc-800 p-5 rounded-3xl text-3xl font-black text-center tracking-widest focus:border-green-500 outline-none transition-all placeholder:text-zinc-700" 
-              />
+              <input placeholder="SALA" value={roomCode} onChange={e => setRoomCode(e.target.value.toUpperCase())} className="w-full bg-zinc-900 border-2 border-zinc-800 p-5 rounded-3xl text-3xl font-black text-center tracking-widest focus:border-green-500 outline-none transition-all placeholder:text-zinc-700" />
             </div>
           </div>
-
-          <button 
-            onClick={entrarNaSala} 
-            className="w-full bg-white text-black font-black py-6 rounded-full text-2xl shadow-[0_20px_40px_rgba(255,255,255,0.1)] active:scale-95 transition-all"
-          >
-            ENTRAR NA SALA
-          </button>
+          <button onClick={entrarNaSala} className="w-full bg-white text-black font-black py-6 rounded-full text-2xl shadow-[0_20px_40px_rgba(255,255,255,0.1)] active:scale-95 transition-all">ENTRAR NA SALA</button>
         </div>
       </div>
     );
   }
 
-  // --- LOBBY (ESPERANDO TODOS FICAREM PRONTOS) ---
+  // --- LOBBY ---
   if (!ready) {
     return (
       <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center p-8">
         <h2 className="text-zinc-500 font-bold uppercase tracking-widest mb-4">Sala: {roomCode}</h2>
         <h1 className="text-4xl font-black mb-12">Olá, {name}!</h1>
-        <button 
-          onClick={sinalizarPronto} 
-          className="w-full max-w-xs bg-green-500 text-black font-black py-6 rounded-full text-2xl animate-pulse shadow-[0_0_50px_rgba(34,197,94,0.3)]"
-        >
-          ESTOU PRONTO
-        </button>
+        <button onClick={sinalizarPronto} className="w-full max-w-xs bg-green-500 text-black font-black py-6 rounded-full text-2xl animate-pulse shadow-[0_0_50px_rgba(34,197,94,0.3)]">ESTOU PRONTO</button>
       </div>
     );
   }
 
   return (
-    <div className={`min-h-screen flex flex-col items-center justify-center p-6 text-center transition-all duration-700 ${gameState === 'challenge' ? 'bg-amber-500' : 'bg-zinc-950'}`}>
+    <div className={`min-h-screen flex flex-col p-6 transition-all duration-700 ${gameState === 'challenge' ? 'bg-amber-500 justify-center text-center' : 'bg-zinc-950 justify-start'}`}>
       
       {/* ESPERANDO TURNO */}
       {gameState === 'waiting' && (
-        <div className="animate-in fade-in zoom-in duration-500">
+        <div className="flex-1 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
           <div className="w-16 h-16 border-4 border-zinc-800 border-t-green-500 rounded-full animate-spin mx-auto mb-6"></div>
           <p className="text-zinc-400 font-bold uppercase tracking-widest text-sm">Aguarde sua vez...</p>
           <div className="mt-8 flex justify-center gap-1">
@@ -151,34 +128,59 @@ export default function MobilePage() {
         </div>
       )}
 
-      {/* MINHA VEZ */}
+      {/* MINHA VEZ (DESIGN RESTAURADO COM IMAGENS) */}
       {gameState === 'playing' && isMyTurn && (
-        <div className="w-full max-w-sm animate-in slide-in-from-bottom duration-500">
-          <p className="text-zinc-500 font-black text-[10px] uppercase tracking-widest mb-6">Sua timeline tem {timelineSize} cartas</p>
-          <div className="grid grid-cols-1 gap-4">
-            {[...Array(timelineSize + 1)].map((_, i) => (
-              <button 
-                key={i} 
-                onClick={() => confirmarPosicao(i)}
-                onDoubleClick={() => enviarConfirmacaoFinal(i)}
-                className="w-full bg-zinc-900 border-2 border-zinc-800 p-6 rounded-3xl text-2xl font-black active:bg-green-500 active:text-black active:border-white transition-all shadow-xl"
-              >
-                ESPAÇO {i + 1}
-              </button>
+        <div className="w-full max-w-md mx-auto animate-in slide-in-from-bottom duration-500 pb-20 mt-4">
+          <p className="text-zinc-500 font-black text-xs uppercase tracking-widest mb-6 text-center">Encaixe a Música</p>
+          
+          <div className="flex flex-col gap-2">
+            {timeline.map((track, i) => (
+              <Fragment key={track.id}>
+                {/* BOTÃO DE ESPAÇO */}
+                <button 
+                  onClick={() => confirmarPosicao(i)}
+                  onDoubleClick={() => enviarConfirmacaoFinal(i)}
+                  className="w-full bg-zinc-900 border-2 border-dashed border-zinc-700 py-5 rounded-2xl text-zinc-500 font-black hover:border-green-500 hover:text-green-500 active:bg-green-500 active:text-black transition-all flex items-center justify-center gap-3 shadow-lg"
+                >
+                  <div className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-lg leading-none">+</div>
+                </button>
+
+                {/* CARTA DO ÁLBUM */}
+                <div className="bg-zinc-800 rounded-2xl p-3 flex items-center gap-4 shadow-xl border border-zinc-700">
+                  <div className="bg-white text-black font-black px-3 py-1.5 rounded-xl text-xl shadow-inner">{track.year}</div>
+                  <img src={track.imageUrl} alt={track.name} className="w-16 h-16 rounded-xl object-cover shadow-md" />
+                  <div className="text-left flex-1 min-w-0">
+                    <p className="text-sm font-bold text-white truncate">{track.name}</p>
+                    <p className="text-[10px] text-zinc-400 truncate uppercase font-bold mt-1">{track.artist}</p>
+                  </div>
+                </div>
+              </Fragment>
             ))}
+
+            {/* ÚLTIMO BOTÃO DE ESPAÇO */}
+            <button 
+              onClick={() => confirmarPosicao(timeline.length)}
+              onDoubleClick={() => enviarConfirmacaoFinal(timeline.length)}
+              className="w-full bg-zinc-900 border-2 border-dashed border-zinc-700 py-5 rounded-2xl text-zinc-500 font-black hover:border-green-500 hover:text-green-500 active:bg-green-500 active:text-black transition-all flex items-center justify-center gap-3 shadow-lg"
+            >
+              <div className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-lg leading-none">+</div>
+            </button>
           </div>
-          <p className="mt-8 text-[10px] text-zinc-600 font-bold uppercase leading-relaxed">
-            Toque 1x para ver na TV<br/>Toque 2x para confirmar
-          </p>
+
+          <div className="fixed bottom-0 left-0 w-full bg-gradient-to-t from-zinc-950 via-zinc-950 to-transparent p-6 pointer-events-none">
+            <p className="text-[10px] text-zinc-400 font-bold uppercase text-center bg-zinc-900/90 backdrop-blur px-4 py-3 rounded-full border border-zinc-800 shadow-2xl mx-auto w-max pointer-events-auto">
+              1 Toque = Testar na TV &nbsp;•&nbsp; 2 Toques = Confirmar
+            </p>
+          </div>
         </div>
       )}
 
-      {/* DISCORDAR (FICHAS) */}
+      {/* TELA DE DESAFIO (FICHAS) */}
       {gameState === 'challenge' && (
-        <div className="w-full max-w-sm">
+        <div className="w-full max-w-sm mx-auto flex flex-col items-center">
           <div className="mb-12">
-            <h2 className="text-8xl font-black text-black leading-none">{challengeTimer}s</h2>
-            <p className="text-black font-black uppercase tracking-tighter text-xl">VOCÊ DISCORDA?</p>
+            <h2 className="text-9xl font-black text-black leading-none">{challengeTimer}</h2>
+            <p className="text-black font-black uppercase tracking-tighter text-xl mt-2">VOCÊ DISCORDA?</p>
           </div>
           
           <button 
@@ -202,7 +204,7 @@ export default function MobilePage() {
       )}
 
       {gameState === 'result' && (
-        <div className="animate-bounce">
+        <div className="flex-1 flex items-center justify-center animate-bounce">
             <h2 className="text-5xl font-black text-white uppercase tracking-tighter italic">Olhe para a TV!</h2>
         </div>
       )}
