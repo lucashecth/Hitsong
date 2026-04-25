@@ -172,10 +172,32 @@ export default function TVPage() {
     setGameState('playing');
     checkWinCondition(novosJogadores);
 
+    // AGUARDA A ANIMAÇÃO ANTES DE ATUALIZAR A TIMELINE (EVITA DUPLICAÇÃO)
     setTimeout(() => {
+      let jogadoresAtualizados = [...novosJogadores];
+      
+      if (challengerName && !playerAcertou) {
+        // Copia profunda para não duplicar visualmente
+        const cIdx = jogadoresAtualizados.findIndex(p => p.name === challengerName);
+        jogadoresAtualizados[cIdx] = { ...jogadoresAtualizados[cIdx], timeline: [...jogadoresAtualizados[cIdx].timeline] };
+        
+        const correctPos = getCorrectIndex(jogadoresAtualizados[cIdx].timeline, targetYear);
+        jogadoresAtualizados[cIdx].timeline.splice(correctPos, 0, targetCard!);
+        jogadoresAtualizados[cIdx].score += 1;
+      } else if (playerAcertou) {
+        // Copia profunda para não duplicar visualmente
+        jogadoresAtualizados[playerIndex] = { ...jogadoresAtualizados[playerIndex], timeline: [...jogadoresAtualizados[playerIndex].timeline] };
+        
+        jogadoresAtualizados[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
+        jogadoresAtualizados[playerIndex].score += 1;
+      }
+
+      setPlayers(jogadoresAtualizados);
+      checkWinCondition(jogadoresAtualizados);
+
       if (gameState !== 'winner') {
         const next = (playerIndex + 1) % players.length;
-        iniciarTurno(next, novosJogadores, deck);
+        iniciarTurno(next, jogadoresAtualizados, deck);
       }
     }, 6000);
   };

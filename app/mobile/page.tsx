@@ -52,8 +52,18 @@ export default function MobilePage() {
         channel.send({ type: 'broadcast', event: 'join', payload: { name: name.toUpperCase() } });
         
         if (isReconnect) {
+            channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        channel.send({ type: 'broadcast', event: 'join', payload: { name: name.toUpperCase() } });
+        
+        if (isReconnect) {
             channel.send({ type: 'broadcast', event: 'request-sync', payload: { name: name.toUpperCase() } });
             setReady(true);
+            setGameState('waiting'); // ISSO MATA A TELA PRETA! Mostra o ícone carregando até a TV responder.
+        }
+        setJoined(true);
+      }
+    });
         }
         setJoined(true);
       }
