@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { supabase } from '@/lib/supabase'; // Certifique-se de que o caminho está correto
+import { supabase } from '@/lib/supabase';
 
 interface Track {
   id: string;
@@ -11,7 +11,7 @@ interface Track {
   name: string;
   artist: string;
   imageUrl: string;
-  cadastrado_por?: string; // Novo campo
+  cadastrado_por?: string;
 }
 
 export default function Home() {
@@ -25,7 +25,6 @@ export default function Home() {
   const [isFetching, setIsFetching] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // --- EFEITO QUE CARREGA O ACERVO GLOBAL DO SUPABASE ---
   useEffect(() => {
     const carregarAcervoGlobal = async () => {
       const { data, error } = await supabase
@@ -39,7 +38,6 @@ export default function Home() {
         setSavedTracks(data);
       }
     };
-
     carregarAcervoGlobal();
   }, []);
 
@@ -63,62 +61,60 @@ export default function Home() {
     }
 
     try {
-      let novasCartasEncontradas: Track[] = [];
+      const novasCartasEncontradas: Track[] = [];
 
       for (const link of links) {
-        let endpoint = '';
-        let type: 'playlist' | 'album' | 'track' | null = null;
-
         if (link.includes('/playlist/')) {
           const playlistId = link.split('/playlist/')[1].split('?')[0];
-          endpoint = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
-          type = 'playlist';
-        } else if (link.includes('/album/')) {
-          const albumId = link.split('/album/')[1].split('?')[0];
-          endpoint = `https://api.spotify.com/v1/albums/${albumId}`;
-          type = 'album';
-        } else if (link.includes('/track/')) {
-          const trackId = link.split('/track/')[1].split('?')[0];
-          endpoint = `https://api.spotify.com/v1/tracks/${trackId}`;
-          type = 'track';
-        } else continue;
+          let nextUrl: string | null = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
+          
+          while (nextUrl) {
+            // Tipagem explícita para matar o erro ts(7022)
+            const res: Response = await fetch(nextUrl, { headers: { Authorization: `Bearer ${token}` } });
+            if (!res.ok) break;
+            const playlistData: any = await res.json();
 
-        const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${token}` } });
-        if (!response.ok) continue; 
-        const data = await response.json();
-
-        if (type === 'playlist') {
-          data.items.forEach((item: any) => {
-            if (item.track?.id) {
-              novasCartasEncontradas.push({
-                id: item.track.id,
-                year: item.track.album.release_date.substring(0, 4),
-                name: item.track.name,
-                artist: item.track.artists[0].name,
-                imageUrl: item.track.album.images[0]?.url || '',
-                cadastrado_por: session?.user?.name || 'Anônimo' // Já identifica quem buscou
-              });
-            }
-          });
-        } else if (type === 'album') {
-          const albumYear = data.release_date.substring(0, 4);
-          const albumImage = data.images[0]?.url || '';
-          data.tracks.items.forEach((track: any) => {
-            novasCartasEncontradas.push({ 
-                id: track.id, 
-                year: albumYear, 
-                name: track.name, 
-                artist: track.artists[0].name, 
-                imageUrl: albumImage,
-                cadastrado_por: session?.user?.name || 'Anônimo'
+            playlistData.items.forEach((item: any) => {
+              if (item.track?.id) {
+                novasCartasEncontradas.push({
+                  id: item.track.id,
+                  year: item.track.album.release_date.substring(0, 4),
+                  name: item.track.name,
+                  artist: item.track.artists[0].name,
+                  imageUrl: item.track.album.images[0]?.url || '',
+                  cadastrado_por: session?.user?.name || 'Anônimo'
+                });
+              }
             });
-          });
-        } else if (type === 'track') {
-          novasCartasEncontradas.push({
-            id: data.id, year: data.album.release_date.substring(0, 4),
-            name: data.name, artist: data.artists[0].name, imageUrl: data.album.images[0]?.url || '',
-            cadastrado_por: session?.user?.name || 'Anônimo'
-          });
+            nextUrl = playlistData.next; 
+          }
+        } 
+        else if (link.includes('/album/')) {
+          const albumId = link.split('/album/')[1].split('?')[0];
+          const res: Response = await fetch(`https://api.spotify.com/v1/albums/${albumId}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (res.ok) {
+            const albumData: any = await res.json();
+            const albumYear = albumData.release_date.substring(0, 4);
+            const albumImage = albumData.images[0]?.url || '';
+            albumData.tracks.items.forEach((track: any) => {
+              novasCartasEncontradas.push({ 
+                id: track.id, year: albumYear, name: track.name, artist: track.artists[0].name, imageUrl: albumImage,
+                cadastrado_por: session?.user?.name || 'Anônimo'
+              });
+            });
+          }
+        } 
+        else if (link.includes('/track/')) {
+          const trackId = link.split('/track/')[1].split('?')[0];
+          const res: Response = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (res.ok) {
+            const trackData: any = await res.json();
+            novasCartasEncontradas.push({
+              id: trackData.id, year: trackData.album.release_date.substring(0, 4),
+              name: trackData.name, artist: trackData.artists[0].name, imageUrl: trackData.album.images[0]?.url || '',
+              cadastrado_por: session?.user?.name || 'Anônimo'
+            });
+          }
         }
       }
 
@@ -134,37 +130,25 @@ export default function Home() {
     }
   };
 
-  // --- GRAVAR NO SUPABASE (GLOBAL) ---
   const saveDeck = async () => {
     if (parsedTracks.length === 0) return;
-
-    const { error } = await supabase
-      .from('tracks')
-      .upsert(parsedTracks, { onConflict: 'id' });
-
+    const { error } = await supabase.from('tracks').upsert(parsedTracks, { onConflict: 'id' });
     if (error) {
-      alert("Erro ao gravar no banco: " + error.message);
+      alert("Erro ao gravar: " + error.message);
     } else {
-      alert(`${parsedTracks.length} músicas adicionadas ao acervo global!`);
+      alert(`${parsedTracks.length} músicas gravadas no acervo global!`);
+      // Atualiza a lista local com as novas músicas
       setSavedTracks(prev => [...parsedTracks, ...prev]);
       setParsedTracks([]);
     }
   };
 
-  const removerDoPreview = (id: string) => {
-    setParsedTracks(prev => prev.filter(t => t.id !== id));
-  };
+  const removerDoPreview = (id: string) => setParsedTracks(prev => prev.filter(t => t.id !== id));
 
   const removerDoAcervo = async (id: string) => {
-    if (!confirm('Deseja remover esta música do acervo GLOBAL?')) return;
-    
+    if (!confirm('Remover do acervo GLOBAL?')) return;
     const { error } = await supabase.from('tracks').delete().eq('id', id);
-    
-    if (error) {
-      alert("Erro ao deletar: " + error.message);
-    } else {
-      setSavedTracks(prev => prev.filter(t => t.id !== id));
-    }
+    if (!error) setSavedTracks(prev => prev.filter(t => t.id !== id));
   };
 
   const filteredSavedTracks = savedTracks.filter(track => 
@@ -184,8 +168,6 @@ export default function Home() {
       </header>
 
       <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
-        {/* COLUNA 1: INPUT */}
         <div className="flex flex-col gap-6">
           <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-3xl shadow-xl">
             <h2 className="text-xl font-bold mb-4">Alimentar Banco</h2>
@@ -193,10 +175,10 @@ export default function Home() {
               value={inputUrl}
               onChange={(e) => setInputUrl(e.target.value)}
               placeholder="Cole os links do Spotify..."
-              className="w-full h-32 bg-zinc-950 border border-zinc-700 rounded-2xl p-4 text-sm focus:border-green-500 focus:outline-none resize-none"
+              className="w-full h-32 bg-zinc-950 border border-zinc-700 rounded-2xl p-4 text-sm focus:border-green-500 outline-none resize-none"
             />
             <button onClick={buscarDoSpotify} disabled={isFetching} className="w-full mt-4 bg-blue-600 font-bold py-3 rounded-xl hover:bg-blue-500 transition-all disabled:opacity-50">
-              {isFetching ? 'Buscando...' : 'Verificar Links'}
+              {isFetching ? 'Buscando playlist inteira...' : 'Verificar Links'}
             </button>
             {errorMsg && <p className="text-red-500 text-xs mt-2">{errorMsg}</p>}
           </div>
@@ -207,7 +189,7 @@ export default function Home() {
               <p className="text-4xl font-black text-green-500">{savedTracks.length}</p>
             </div>
             <div className="text-right">
-                <p className="text-[10px] text-zinc-600 font-bold mb-1 italic">Olá, {session?.user?.name || 'Visitante'}</p>
+                <p className="text-[10px] text-zinc-600 font-bold mb-1 italic">Logado como: {session?.user?.name || 'Visitante'}</p>
             </div>
           </div>
         </div>
@@ -222,7 +204,7 @@ export default function Home() {
             {parsedTracks.map((track) => {
               const isDupe = savedTracks.some(t => t.id === track.id);
               return (
-                <div key={track.id} className={`bg-zinc-950 p-3 rounded-xl flex items-center justify-between border transition-all ${isDupe ? 'border-red-900/50 opacity-40 grayscale' : 'border-zinc-800 hover:border-zinc-600'}`}>
+                <div key={track.id} className={`bg-zinc-950 p-3 rounded-xl flex items-center justify-between border transition-all ${isDupe ? 'border-red-900/50 opacity-40 grayscale' : 'border-zinc-800'}`}>
                   <div className="flex items-center gap-3 truncate">
                     <img src={track.imageUrl} className="w-10 h-10 rounded shadow-lg object-cover" alt="" />
                     <div className="truncate">
@@ -245,10 +227,10 @@ export default function Home() {
             <h2 className="text-xl font-bold">Acervo Global</h2>
             <input 
               type="text" 
-              placeholder="Busca..." 
+              placeholder="Filtro..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-24 bg-zinc-950 border border-zinc-800 rounded-lg p-1 text-[10px] focus:border-green-500 outline-none"
+              className="w-24 bg-zinc-950 border border-zinc-800 rounded-lg p-1 text-[10px] outline-none"
             />
           </div>
 
@@ -265,7 +247,6 @@ export default function Home() {
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                     </button>
                 </div>
-                {/* TAG DE QUEM CADASTROU */}
                 <div className="flex justify-end">
                     <span className="text-[8px] bg-zinc-900 text-zinc-500 px-2 py-0.5 rounded-full border border-zinc-800">
                         Curador: <span className="text-blue-400">{track.cadastrado_por || 'Antigo'}</span>
@@ -275,7 +256,6 @@ export default function Home() {
             ))}
           </div>
         </div>
-
       </main>
     </div>
   );
