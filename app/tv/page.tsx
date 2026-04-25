@@ -141,44 +141,60 @@ export default function TVPage() {
     if (slotIndex < activePlayer.timeline.length && parseInt(activePlayer.timeline[slotIndex].year) < targetYear) playerAcertou = false;
 
     let novosJogadores = [...players];
+    let acertouDeFato = false;
 
     if (challengerName) {
       const challengerIndex = novosJogadores.findIndex(p => p.name === challengerName);
       novosJogadores[challengerIndex].tokens -= 1;
 
       if (!playerAcertou) {
-        const correctPos = getCorrectIndex(novosJogadores[challengerIndex].timeline, targetYear);
-        novosJogadores[challengerIndex].timeline.splice(correctPos, 0, targetCard!);
-        novosJogadores[challengerIndex].score += 1;
-        setRevealSuccess(false); // O jogador da vez errou
+        // Desafiante roubou a carta
+        acertouDeFato = true; // Para mostrar o ano na TV
+        // A carta será inserida no banco de dados local do player apenas no setTimeout abaixo
       } else {
-        novosJogadores[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
-        novosJogadores[playerIndex].score += 1;
-        setRevealSuccess(true);
+        // Desafiante perdeu a ficha, jogador ativo ganha
+        acertouDeFato = true;
       }
     } else {
-      if (playerAcertou) {
-        novosJogadores[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
-        novosJogadores[playerIndex].score += 1;
-        setRevealSuccess(true);
-      } else {
-        setRevealSuccess(false);
-        tocarSomErro();
-      }
+      if (playerAcertou) acertouDeFato = true;
     }
 
-    setPlayers(novosJogadores);
+    setRevealSuccess(acertouDeFato);
     setActionState('revealed');
-    setGameState('playing');
-    checkWinCondition(novosJogadores);
+    setGameState('playing'); // Sai do modo desafio
 
+    if (!acertouDeFato) tocarSomErro();
+
+    // MANDAR RESULTADO PROS MÓVEIS
+    channelRef.current?.send({ 
+      type: 'broadcast', 
+      event: 'play-result', 
+      payload: { success: acertouDeFato, actualYear: targetCard?.year } 
+    });
+
+    // AGUARDA A ANIMAÇÃO ANTES DE ATUALIZAR A TIMELINE (EVITA DUPLICAÇÃO)
     setTimeout(() => {
+      let jogadoresAtualizados = [...novosJogadores];
+      
+      if (challengerName && !playerAcertou) {
+        const cIdx = jogadoresAtualizados.findIndex(p => p.name === challengerName);
+        const correctPos = getCorrectIndex(jogadoresAtualizados[cIdx].timeline, targetYear);
+        jogadoresAtualizados[cIdx].timeline.splice(correctPos, 0, targetCard!);
+        jogadoresAtualizados[cIdx].score += 1;
+      } else if (playerAcertou) {
+        jogadoresAtualizados[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
+        jogadoresAtualizados[playerIndex].score += 1;
+      }
+
+      setPlayers(jogadoresAtualizados);
+      checkWinCondition(jogadoresAtualizados);
+
       if (gameState !== 'winner') {
         const next = (playerIndex + 1) % players.length;
-        iniciarTurno(next, novosJogadores, deck);
+        iniciarTurno(next, jogadoresAtualizados, deck);
       }
     }, 6000);
-  };
+};
 
   // --- FUNÇÕES DE APOIO ---
   const criarSala = async () => {
