@@ -18,6 +18,13 @@
     --foreground: #ededed;
   }
 }
+@keyframes confetti-fall {
+  0% { transform: translateY(-100%) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(100vh) rotate(360deg); opacity: 0; }
+}
+.confetti {
+  position: absolute; width: 10px; height: 10px; animation: confetti-fall 4s linear infinite;
+}
 
 body {
   background: var(--background);

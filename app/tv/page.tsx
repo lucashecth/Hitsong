@@ -4,35 +4,15 @@ import { supabase } from '@/lib/supabase';
 import { useSession, signIn, signOut } from 'next-auth/react';
 
 interface Track { id: string; year: string; name: string; artist: string; imageUrl: string; isInitial?: boolean; }
-interface Player { name: string; isReady: boolean; score: number; timeline: Track[] } 
+interface Player { name: string; isReady: boolean; score: number; timeline: Track[]; tokens: number; }
 
-// CD Pequeno e Holográfico (Sem textos embaixo)
+// Componente do CD
 const CompactDisc = ({ large = false }) => (
   <div className={`${large ? 'w-32 h-32 border-[12px]' : 'w-24 h-24 border-[8px]'} rounded-full border-zinc-950 bg-gradient-to-tr from-purple-900 via-fuchsia-700 to-violet-900 shadow-[0_0_30px_rgba(168,85,247,0.3)] animate-[spin_4s_linear_infinite] flex items-center justify-center relative overflow-hidden flex-shrink-0`}>
     <div className="absolute inset-0 bg-[conic-gradient(from_0deg,transparent,rgba(255,255,255,0.3),rgba(236,72,153,0.2),rgba(56,189,248,0.2),rgba(255,255,255,0.3),transparent)] opacity-70 pointer-events-none mix-blend-screen"></div>
     <div className={`${large ? 'w-8 h-8 border-2' : 'w-6 h-6 border-2'} rounded-full bg-zinc-950 border-zinc-800 z-10 shadow-inner`}></div>
   </div>
 );
-
-const tocarSomErro = () => {
-  try {
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const osc1 = audioCtx.createOscillator();
-    osc1.type = 'sawtooth';
-    osc1.frequency.setValueAtTime(150, audioCtx.currentTime);
-    osc1.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 1.5);
-    const osc2 = audioCtx.createOscillator();
-    osc2.type = 'square';
-    osc2.frequency.setValueAtTime(155, audioCtx.currentTime);
-    osc2.frequency.exponentialRampToValueAtTime(42, audioCtx.currentTime + 1.5);
-    const gainNode = audioCtx.createGain();
-    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
-    osc1.connect(gainNode); osc2.connect(gainNode); gainNode.connect(audioCtx.destination);
-    osc1.start(); osc2.start();
-    osc1.stop(audioCtx.currentTime + 1.5); osc2.stop(audioCtx.currentTime + 1.5);
-  } catch (e) { console.error(e); }
-};
 
 export default function TVPage() {
   const { data: session, status } = useSession();
@@ -41,6 +21,12 @@ export default function TVPage() {
   const [gameStarted, setGameStarted] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+
+  // Estados de Jogo
+  const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'winner'>('lobby');
+  const [winner, setWinner] = useState<Player | null>(null);
+  const [challengeTimer, setChallengeTimer] = useState(0);
+  const [pendingMove, setPendingMove] = useState<{ slotIndex: number, playerIndex: number } | null>(null);
 
   const [deck, setDeck] = useState<Track[]>([]);
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
@@ -54,31 +40,50 @@ export default function TVPage() {
 
   useEffect(() => { setIsMounted(true); }, []);
 
-const criarSala = async () => {
-  // 1. Busca todas as músicas cadastradas por qualquer pessoa
-  const { data: bancoDeMusicas, error } = await supabase
-    .from('tracks')
-    .select('*');
+  // --- LÓGICA DE SENHA PARA EDIÇÃO ---
+  const irParaEdicao = () => {
+    const senha = prompt("Digite a senha de editor:");
+    if (senha === "1234") { // Mude sua senha aqui
+        window.location.href = "/";
+    } else {
+        alert("Senha incorreta!");
+    }
+  };
 
-  if (error || !bancoDeMusicas || bancoDeMusicas.length < 10) {
-    alert("O acervo global ainda está pequeno! Cadastre pelo menos 10 músicas.");
-    return;
-  }
+  const getCorrectIndex = (timeline: Track[], targetYear: number) => {
+    let index = 0;
+    while (index < timeline.length && parseInt(timeline[index].year) <= targetYear) {
+      index++;
+    }
+    return index;
+  };
 
-  // 2. Embaralha o deck global
-  const deckEmbaralhado = bancoDeMusicas.sort(() => Math.random() - 0.5);
-  
-  setDeck(deckEmbaralhado);
-  setRoomCode(Math.random().toString(36).substring(2, 6).toUpperCase());
-};
+  const checkWinCondition = (updatedPlayers: Player[]) => {
+    const winnerFound = updatedPlayers.find(p => p.score >= 10);
+    if (winnerFound) {
+      setWinner(winnerFound);
+      setGameState('winner');
+    }
+  };
 
+  // --- TIMER DO DESAFIO ---
+  useEffect(() => {
+    if (challengeTimer > 0) {
+      const timer = setTimeout(() => setChallengeTimer(prev => prev - 1), 1000);
+      return () => clearTimeout(timer);
+    } else if (challengeTimer === 0 && gameState === 'challenge') {
+      finalizarTurnoSemDesafio();
+    }
+  }, [challengeTimer, gameState]);
+
+  // --- REALTIME ---
   useEffect(() => {
     if (!roomCode) return;
     const channel = supabase.channel(`room_${roomCode}`)
       .on('broadcast', { event: 'join' }, ({ payload }) => {
         setPlayers(prev => {
           if (prev.find(p => p.name === payload.name)) return prev;
-          return [...prev, { name: payload.name, isReady: false, score: 0, timeline: [] }];
+          return [...prev, { name: payload.name, isReady: false, score: 0, timeline: [], tokens: 1 }];
         });
       })
       .on('broadcast', { event: 'player-ready' }, ({ payload }) => {
@@ -89,70 +94,107 @@ const criarSala = async () => {
         setActionState('slotted');
       })
       .on('broadcast', { event: 'confirm-play' }, ({ payload }) => {
-        resolverJogada(payload.slotIndex);
+        iniciarJanelaDesafio(payload.slotIndex, currentPlayerIndex);
+      })
+      .on('broadcast', { event: 'challenge-made' }, ({ payload }) => {
+        processarDesafio(payload.challengerName);
       });
 
     channel.subscribe();
     channelRef.current = channel;
     return () => { supabase.removeChannel(channel); };
-  }, [roomCode, targetCard, players, currentPlayerIndex]);
+  }, [roomCode, targetCard, players, currentPlayerIndex, gameState]);
 
-  useEffect(() => {
-    const allReady = players.length > 0 && players.every(p => p.isReady);
-    if (allReady && !gameStarted && countdown === null) setCountdown(3);
-  }, [players, gameStarted, countdown]);
+  const iniciarJanelaDesafio = (slotIndex: number, playerIndex: number) => {
+    setPendingMove({ slotIndex, playerIndex });
+    setGameState('challenge');
+    setChallengeTimer(5);
+    pausarMusica();
 
-  useEffect(() => {
-    if (countdown === null) return;
-    if (countdown === 0) { iniciarPartidaGlobal(); return; }
-    const timer = setTimeout(() => setCountdown(prev => (prev !== null ? prev - 1 : null)), 1000);
-    return () => clearTimeout(timer);
-  }, [countdown]);
-
-  useEffect(() => {
-    if (mobileAction !== null) {
-      setTimeout(() => {
-        const slot = document.getElementById(`slot-${mobileAction}`);
-        const container = document.getElementById('timeline-container');
-        if (slot && container) {
-          const scrollLeft = slot.offsetLeft - (container.clientWidth / 2) + (slot.clientWidth / 2);
-          container.scrollTo({ left: scrollLeft, behavior: 'smooth' });
-        }
-      }, 150);
-    }
-  }, [mobileAction]);
-
-  const tocarMusica = async (trackId: string) => {
-    const token = (session as any)?.accessToken;
-    if (!token) return;
-    try {
-      const devicesRes = await fetch('https://api.spotify.com/v1/me/player/devices', { headers: { 'Authorization': `Bearer ${token}` } });
-      const devicesData = await devicesRes.json();
-      if (!devicesData.devices?.length) return;
-      const targetDevice = devicesData.devices.find((d: any) => d.is_active) || devicesData.devices[0];
-      await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
-        method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 40000 })
-      });
-    } catch (e) {}
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'open-challenge',
+      payload: { 
+        timer: 5,
+        playersTokens: players.map(p => ({ name: p.name, tokens: p.tokens }))
+      }
+    });
   };
 
-  const pausarMusica = async () => {
-    const token = (session as any)?.accessToken;
-    if (!token) return;
-    try { await fetch('https://api.spotify.com/v1/me/player/play?device_id=...', { method: 'PUT', headers: { 'Authorization': `Bearer ${token}` } }); } catch (e) {}
+  const finalizarTurnoSemDesafio = () => {
+    if (!pendingMove) return;
+    resolverJogadaReal(pendingMove.slotIndex, pendingMove.playerIndex, null);
+  };
+
+  const processarDesafio = (challengerName: string) => {
+    if (gameState !== 'challenge') return;
+    setChallengeTimer(-1);
+    resolverJogadaReal(pendingMove!.slotIndex, pendingMove!.playerIndex, challengerName);
+  };
+
+  const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerName: string | null) => {
+    const activePlayer = players[playerIndex];
+    const targetYear = parseInt(targetCard!.year);
+    
+    let playerAcertou = true;
+    if (slotIndex > 0 && parseInt(activePlayer.timeline[slotIndex - 1].year) > targetYear) playerAcertou = false;
+    if (slotIndex < activePlayer.timeline.length && parseInt(activePlayer.timeline[slotIndex].year) < targetYear) playerAcertou = false;
+
+    let novosJogadores = [...players];
+
+    if (challengerName) {
+      const challengerIndex = novosJogadores.findIndex(p => p.name === challengerName);
+      novosJogadores[challengerIndex].tokens -= 1;
+
+      if (!playerAcertou) {
+        const correctPos = getCorrectIndex(novosJogadores[challengerIndex].timeline, targetYear);
+        novosJogadores[challengerIndex].timeline.splice(correctPos, 0, targetCard!);
+        novosJogadores[challengerIndex].score += 1;
+        setRevealSuccess(false); // O jogador da vez errou
+      } else {
+        novosJogadores[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
+        novosJogadores[playerIndex].score += 1;
+        setRevealSuccess(true);
+      }
+    } else {
+      if (playerAcertou) {
+        novosJogadores[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
+        novosJogadores[playerIndex].score += 1;
+        setRevealSuccess(true);
+      } else {
+        setRevealSuccess(false);
+        tocarSomErro();
+      }
+    }
+
+    setPlayers(novosJogadores);
+    setActionState('revealed');
+    setGameState('playing');
+    checkWinCondition(novosJogadores);
+
+    setTimeout(() => {
+      if (gameState !== 'winner') {
+        const next = (playerIndex + 1) % players.length;
+        iniciarTurno(next, novosJogadores, deck);
+      }
+    }, 6000);
+  };
+
+  // --- FUNÇÕES DE APOIO ---
+  const criarSala = async () => {
+    const { data } = await supabase.from('tracks').select('*');
+    if (!data || data.length < 10) return alert("Acervo insuficiente!");
+    setDeck(data.sort(() => Math.random() - 0.5));
+    setRoomCode(Math.random().toString(36).substring(2, 6).toUpperCase());
   };
 
   const iniciarPartidaGlobal = () => {
     const currentDeck = [...deck];
-    const initialPlayers = players.map(p => {
-      const firstCard = { ...currentDeck.pop()!, isInitial: true };
-      return { ...p, timeline: [firstCard] };
-    });
+    const initialPlayers = players.map(p => ({ ...p, timeline: [{ ...currentDeck.pop()!, isInitial: true }], tokens: 1 }));
     setPlayers(initialPlayers);
     setDeck(currentDeck);
     setGameStarted(true);
-    setCountdown(null);
+    setGameState('playing');
     iniciarTurno(0, initialPlayers, currentDeck);
   };
 
@@ -172,45 +214,82 @@ const criarSala = async () => {
     });
   };
 
-  const resolverJogada = (slotIndex: number) => {
-    if (!targetCard) return;
-    const currentPlayer = players[currentPlayerIndex];
-    const pTimeline = currentPlayer.timeline;
-    const targetYear = parseInt(targetCard.year);
-    let acertou = true;
-    
-    if (slotIndex > 0 && parseInt(pTimeline[slotIndex - 1].year) > targetYear) acertou = false;
-    if (slotIndex < pTimeline.length && parseInt(pTimeline[slotIndex].year) < targetYear) acertou = false;
+  const tocarMusica = async (trackId: string) => {
+    const token = (session as any)?.accessToken;
+    if (!token) return;
+    try {
+      const devicesRes = await fetch('https://api.spotify.com/v1/me/player/devices', { headers: { 'Authorization': `Bearer ${token}` } });
+      const devicesData = await devicesRes.json();
+      const targetDevice = devicesData.devices?.find((d: any) => d.is_active) || devicesData.devices?.[0];
+      await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
+        method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 40000 })
+      });
+    } catch (e) {}
+  };
 
-    setActionState('revealed');
-    setRevealSuccess(acertou);
-    
-    if (!acertou) {
-      pausarMusica();
-      tocarSomErro();
-    }
+  const pausarMusica = async () => {
+    const token = (session as any)?.accessToken;
+    if (!token) return;
+    await fetch('https://api.spotify.com/v1/me/player/play?device_id=...', { method: 'PUT', headers: { 'Authorization': `Bearer ${token}` } });
+  };
 
-    channelRef.current?.send({ type: 'broadcast', event: 'play-result', payload: { success: acertou, actualYear: targetCard.year } });
-
-    setTimeout(() => {
-      let novosJogadores = [...players];
-      if (acertou) {
-        const novaTimeline = [...pTimeline];
-        novaTimeline.splice(slotIndex, 0, targetCard);
-        novosJogadores[currentPlayerIndex] = { ...currentPlayer, score: currentPlayer.score + 1, timeline: novaTimeline };
-        setPlayers(novosJogadores);
-      }
-      const nextPlayer = (currentPlayerIndex + 1) % players.length;
-      iniciarTurno(nextPlayer, novosJogadores, deck);
-    }, 6000); 
+  const tocarSomErro = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc1 = audioCtx.createOscillator();
+      osc1.type = 'sawtooth';
+      osc1.frequency.setValueAtTime(150, audioCtx.currentTime);
+      const gainNode = audioCtx.createGain();
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      osc1.connect(gainNode); gainNode.connect(audioCtx.destination);
+      osc1.start(); osc1.stop(audioCtx.currentTime + 1);
+    } catch (e) {}
   };
 
   if (!isMounted) return null;
 
+  // --- TELA DE VITORIA ---
+  if (gameState === 'winner' && winner) {
+    const ranking = [...players].sort((a, b) => b.score - a.score);
+    return (
+      <div className="fixed inset-0 z-[100] bg-zinc-950 flex flex-col items-center justify-center overflow-hidden">
+        <style jsx>{`
+            @keyframes fall { 0% { transform: translateY(-10vh); } 100% { transform: translateY(110vh); } }
+            .confetti { position: absolute; width: 10px; height: 10px; animation: fall 4s linear infinite; }
+        `}</style>
+        {[...Array(40)].map((_, i) => (
+          <div key={i} className="confetti" style={{ 
+            left: `${Math.random() * 100}%`, 
+            animationDelay: `${Math.random() * 5}s`,
+            backgroundColor: i % 2 === 0 ? '#22c55e' : '#a855f7'
+          }} />
+        ))}
+        <div className="text-center mb-10">
+          <h1 className="text-xl font-black text-zinc-500 uppercase tracking-widest">Campeão</h1>
+          <h2 className="text-8xl font-black text-white">{winner.name}</h2>
+        </div>
+        <div className="flex items-end gap-4 h-64 mb-10">
+          {ranking[1] && <div className="flex flex-col items-center"><span className="font-bold text-zinc-400">{ranking[1].name}</span><div className="w-24 bg-zinc-800 h-32 rounded-t-2xl flex items-center justify-center text-2xl font-black">2</div></div>}
+          <div className="flex flex-col items-center"><span className="font-black text-green-500">{ranking[0].name}</span><div className="w-32 bg-white text-black h-48 rounded-t-2xl flex items-center justify-center text-5xl font-black">1</div></div>
+          {ranking[2] && <div className="flex flex-col items-center"><span className="font-bold text-zinc-600">{ranking[2].name}</span><div className="w-24 bg-zinc-900 h-24 rounded-t-2xl flex items-center justify-center text-xl font-black">3</div></div>}
+        </div>
+        <div className="w-full max-w-sm space-y-2">
+            {ranking.slice(3).map((p, i) => (
+                <div key={i} className="flex justify-between p-3 bg-zinc-900 rounded-xl border border-zinc-800">
+                    <span className="text-zinc-400">{i + 4}º {p.name}</span>
+                    <span className="font-bold">{p.score} pts</span>
+                </div>
+            ))}
+        </div>
+        <button onClick={() => window.location.reload()} className="mt-10 bg-zinc-800 px-6 py-2 rounded-full font-bold">Novo Jogo</button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen w-screen bg-zinc-950 text-white font-sans overflow-hidden relative">
-      
-      {/* Background Mesh (Apple Style) */}
+      {/* Background Mesh */}
       <div className="absolute inset-0 opacity-20 pointer-events-none z-0">
         <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-purple-600 blur-[120px] animate-pulse"></div>
         <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-blue-600 blur-[120px] animate-pulse" style={{ animationDelay: '2s' }}></div>
@@ -219,27 +298,23 @@ const criarSala = async () => {
       <style jsx>{`
         @keyframes dropIn { 0% { transform: translateY(-70vh) scale(0.5); opacity: 0; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
         .anim-drop { animation: dropIn 0.8s cubic-bezier(0.2, 0.8, 0.2, 1.05) forwards; }
-        @keyframes fallOut { 0% { transform: translateY(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(100vh) rotate(15deg); opacity: 0; } }
-        .anim-fall { animation: fallOut 0.7s cubic-bezier(0.4, 0, 1, 1) forwards; }
         @keyframes flipIn { 0% { transform: rotateY(90deg) scale(0.9); opacity: 0; } 100% { transform: rotateY(0deg) scale(1); opacity: 1; } }
         .anim-flip { animation: flipIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
 
-      {/* HEADER FIXO */}
+      {/* HEADER */}
       <div className="w-full bg-zinc-900/40 backdrop-blur-md px-8 py-4 flex justify-between items-center border-b border-zinc-800/50 z-50 flex-shrink-0">
         <div className="flex items-center gap-4">
           <div className="w-2 h-2 bg-green-500 rounded-full animate-ping"></div>
           <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{session?.user?.name || 'Spotify'}</span>
         </div>
         <div className="flex items-center gap-6">
+          <button onClick={irParaEdicao} className="text-[10px] bg-zinc-800 px-3 py-1 rounded hover:bg-zinc-700">EDITAR ACERVO</button>
           {roomCode && <span className="text-sm font-black text-white bg-zinc-800 px-4 py-1.5 rounded-full border border-zinc-700">SALA: {roomCode}</span>}
-          
-          {/* BOTÃO DE RECONEXÃO (URL SOLICITADA) */}
-          <a href="https://hitsong.vercel.app/api/auth/callback/spotify" className="text-[10px] font-bold bg-green-500/10 text-green-500 border border-green-500/20 px-3 py-1 rounded-md hover:bg-green-500 hover:text-black transition-all">RECONECTAR</a>
-          
-          <button onClick={() => signOut({ callbackUrl: '/tv' })} className="text-[10px] font-bold text-zinc-500 hover:text-white transition-colors">SAIR</button>
+          <a href="https://hitsong.vercel.app/api/auth/callback/spotify" className="text-[10px] font-bold text-green-500 border border-green-500/20 px-3 py-1 rounded-md">RECONECTAR</a>
+          <button onClick={() => signOut({ callbackUrl: '/tv' })} className="text-[10px] font-bold text-zinc-500">SAIR</button>
         </div>
       </div>
 
@@ -249,7 +324,7 @@ const criarSala = async () => {
             <button onClick={criarSala} className="bg-white text-black font-black text-3xl py-6 px-16 rounded-full shadow-2xl hover:scale-105 transition-transform">ABRIR NOVA SALA</button>
           ) : (
             <div className="w-full max-w-4xl">
-              <h1 className="text-[10rem] leading-none font-black text-white mb-16 tracking-tighter animate-pulse">{roomCode}</h1>
+              <h1 className="text-[10rem] leading-none font-black text-white mb-16 animate-pulse">{roomCode}</h1>
               <div className="grid grid-cols-2 gap-4">
                 {players.map((p) => (
                   <div key={p.name} className={`p-4 rounded-2xl border-2 ${p.isReady ? 'border-green-500 bg-green-500/5' : 'border-zinc-800 bg-zinc-900/50'}`}>
@@ -257,84 +332,71 @@ const criarSala = async () => {
                   </div>
                 ))}
               </div>
+              {players.length > 0 && players.every(p => p.isReady) && (
+                  <button onClick={iniciarPartidaGlobal} className="mt-10 bg-green-500 text-black font-black px-10 py-4 rounded-full text-xl">COMEÇAR</button>
+              )}
             </div>
           )}
         </div>
       ) : (
         <div className="flex flex-1 relative overflow-hidden z-10">
-          
+          {/* PLACAR LATERAL */}
           <div className="w-28 bg-zinc-900/30 backdrop-blur-xl border-r border-zinc-800/50 flex flex-col items-center py-10 gap-6 z-40 flex-shrink-0">
             {players.map((p, i) => (
-              <div key={i} className={`relative w-16 h-16 rounded-2xl flex flex-col items-center justify-center transition-all duration-500 ${i === currentPlayerIndex ? 'bg-white text-black scale-110 shadow-2xl' : 'bg-zinc-800/50 text-zinc-500'}`}>
-                <span className="text-xs font-bold opacity-60 uppercase mb-[-2px]">{p.name.substring(0,3)}</span>
+              <div key={i} className={`relative w-16 h-16 rounded-2xl flex flex-col items-center justify-center transition-all duration-500 ${i === currentPlayerIndex ? 'bg-white text-black scale-110' : 'bg-zinc-800/50 text-zinc-500'}`}>
+                <span className="text-xs font-bold uppercase mb-[-2px]">{p.name.substring(0,3)}</span>
                 <span className="text-2xl font-black">{p.score}</span>
+                {/* Visual das Fichas */}
+                <div className="absolute -bottom-2 flex gap-1">
+                    {[...Array(p.tokens)].map((_, t) => <div key={t} className="w-2 h-2 bg-amber-400 rounded-full shadow-[0_0_5px_rgba(251,191,36,0.8)]" />)}
+                </div>
               </div>
             ))}
           </div>
 
-          <div className="flex-1 flex flex-col relative overflow-hidden">
-            <div className={`w-full py-8 text-center transition-all duration-700 z-20 flex-shrink-0 ${actionState === 'revealed' ? (revealSuccess ? 'bg-green-600 shadow-[0_20px_50px_rgba(22,163,74,0.3)]' : 'bg-red-600 shadow-[0_20px_50px_rgba(220,38,38,0.3)]') : 'bg-transparent'}`}>
+          <div className="flex-1 flex flex-col relative">
+            {/* STATUS DO TURNO / DESAFIO */}
+            <div className={`w-full py-8 text-center z-20 ${gameState === 'challenge' ? 'bg-amber-500 text-black' : actionState === 'revealed' ? (revealSuccess ? 'bg-green-600' : 'bg-red-600') : 'bg-transparent'}`}>
               <h1 className="text-5xl font-black uppercase tracking-tighter">
-                {actionState === 'revealed' ? (revealSuccess ? `ACERTOU, ${players[currentPlayerIndex]?.name}!` : `ERROU, ${players[currentPlayerIndex]?.name}!`) : `Vez de: ${players[currentPlayerIndex]?.name}`}
+                {gameState === 'challenge' ? `DISCORDAR? (${challengeTimer}s)` : actionState === 'revealed' ? (revealSuccess ? 'ACERTOU!' : 'ERROU!') : `Vez de: ${players[currentPlayerIndex]?.name}`}
               </h1>
             </div>
 
-            {actionState === 'waiting' && (
-              <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center z-10">
-                <CompactDisc large />
-              </div>
-            )}
+            {actionState === 'waiting' && <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-10"><CompactDisc large /></div>}
 
             <div id="timeline-container" className="absolute bottom-0 w-full overflow-x-auto no-scrollbar pb-12 pt-40 z-10 scroll-smooth">
               <div className="flex items-end h-[24rem] w-max px-[40vw] gap-4 mx-auto">
-                
                 {players[currentPlayerIndex]?.timeline.map((track, i) => (
                   <Fragment key={track.id}>
                     <div id={`slot-${i}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === i ? 'w-48' : 'w-4'}`}>
                       {mobileAction === i && (
-                        <div className={`absolute bottom-20 z-30 ${actionState === 'slotted' ? 'anim-drop' : ''} ${actionState === 'revealed' && revealSuccess ? 'anim-flip' : ''} ${actionState === 'revealed' && !revealSuccess ? 'anim-fall' : ''}`}>
-                          {actionState === 'revealed' && revealSuccess ? (
+                        <div className={`absolute bottom-20 z-30 ${actionState === 'slotted' ? 'anim-drop' : ''} ${actionState === 'revealed' ? 'anim-flip' : ''}`}>
+                          {actionState === 'revealed' ? (
                             <div className="flex flex-col items-center scale-110">
                               <div className="bg-white text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20 shadow-2xl">{targetCard?.year}</div>
-                              <img src={targetCard?.imageUrl} className="w-40 h-40 rounded-[2rem] border-4 border-green-500 shadow-2xl object-cover" />
-                              <div className="mt-4 text-center w-40">
-                                 <p className="text-base italic text-zinc-300 truncate px-2">{targetCard?.name}</p>
-                                 <p className="text-xs font-bold text-zinc-600 truncate uppercase tracking-tighter">{targetCard?.artist}</p>
-                              </div>
+                              <img src={targetCard?.imageUrl} className="w-40 h-40 rounded-[2rem] border-4 border-zinc-500 object-cover" />
+                              <div className="mt-4 text-center w-40"><p className="text-sm italic text-zinc-300">{targetCard?.name}</p><p className="text-xs font-bold text-zinc-500">{targetCard?.artist}</p></div>
                             </div>
-                          ) : (
-                            <CompactDisc />
-                          )}
+                          ) : <CompactDisc />}
                         </div>
                       )}
                     </div>
-
-                    <div className="flex flex-col items-center flex-shrink-0 z-20 group">
-                      <div className="bg-zinc-100 text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20 shadow-xl">{track.year}</div>
-                      <img src={track.imageUrl} className={`w-44 h-44 rounded-[2.5rem] border-4 shadow-2xl object-cover transition-all ${track.isInitial ? 'border-amber-400 shadow-[0_0_40px_rgba(251,191,36,0.3)]' : 'border-zinc-800'}`} />
-                      <div className="mt-4 text-center w-44">
-                         <p className="text-base italic text-zinc-400 truncate px-2">{track.name}</p>
-                         <p className="text-xs font-bold text-zinc-600 truncate uppercase tracking-tighter">{track.artist}</p>
-                      </div>
+                    <div className="flex flex-col items-center flex-shrink-0 z-20">
+                      <div className="bg-zinc-100 text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20">{track.year}</div>
+                      <img src={track.imageUrl} className={`w-44 h-44 rounded-[2.5rem] border-4 ${track.isInitial ? 'border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.4)]' : 'border-zinc-800'}`} />
+                      <div className="mt-4 text-center w-44"><p className="text-sm italic text-zinc-400">{track.name}</p><p className="text-xs font-bold text-zinc-600">{track.artist}</p></div>
                     </div>
                   </Fragment>
                 ))}
-
                 <div id={`slot-${players[currentPlayerIndex]?.timeline.length}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === players[currentPlayerIndex]?.timeline.length ? 'w-48' : 'w-4'}`}>
                   {mobileAction === players[currentPlayerIndex]?.timeline.length && (
-                    <div className={`absolute bottom-20 z-30 ${actionState === 'slotted' ? 'anim-drop' : ''} ${actionState === 'revealed' && revealSuccess ? 'anim-flip' : ''} ${actionState === 'revealed' && !revealSuccess ? 'anim-fall' : ''}`}>
-                      {actionState === 'revealed' && revealSuccess ? (
+                    <div className={`absolute bottom-20 z-30 ${actionState === 'slotted' ? 'anim-drop' : ''} ${actionState === 'revealed' ? 'anim-flip' : ''}`}>
+                      {actionState === 'revealed' ? (
                         <div className="flex flex-col items-center scale-110">
                           <div className="bg-white text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20 shadow-2xl">{targetCard?.year}</div>
-                          <img src={targetCard?.imageUrl} className="w-40 h-40 rounded-[2rem] border-4 border-green-500 shadow-2xl object-cover" />
-                          <div className="mt-4 text-center w-40">
-                             <p className="text-base italic text-zinc-300 truncate px-2">{targetCard?.name}</p>
-                             <p className="text-xs font-bold text-zinc-600 truncate uppercase tracking-tighter">{targetCard?.artist}</p>
-                          </div>
+                          <img src={targetCard?.imageUrl} className="w-40 h-40 rounded-[2rem] border-4 border-zinc-500 object-cover" />
                         </div>
-                      ) : (
-                        <CompactDisc />
-                      )}
+                      ) : <CompactDisc />}
                     </div>
                   )}
                 </div>
