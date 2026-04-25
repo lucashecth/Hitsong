@@ -453,21 +453,32 @@ export default function TVPage() {
       </div>
 
       {!gameStarted ? (
-        <div className="flex-1 flex flex-col items-center justify-center p-10 z-10 text-center">
+        <div className="flex-1 flex flex-col items-center justify-center p-10 z-10 text-center relative">
           {!roomCode ? (
             <button onClick={criarSala} className="bg-white text-black font-black text-3xl py-6 px-16 rounded-full shadow-2xl hover:scale-105 transition-transform">ABRIR NOVA SALA</button>
           ) : (
-            <div className="w-full max-w-4xl">
-              <h1 className="text-[10rem] leading-none font-black text-white mb-16 animate-pulse">{roomCode}</h1>
-              <div className="grid grid-cols-2 gap-4">
+            <div className="w-full max-w-4xl flex flex-col items-center relative h-full justify-start pt-10">
+              <h1 className="text-[10rem] leading-none font-black text-white mb-8 animate-pulse">{roomCode}</h1>
+              
+              {/* GRID COM SCROLL PARA NÃO QUEBRAR A TELA */}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 w-full max-h-[45vh] overflow-y-auto no-scrollbar pb-32">
                 {players.map((p) => (
-                  <div key={p.name} className={`p-4 rounded-2xl border-2 ${p.isReady ? 'border-green-500 bg-green-500/5' : 'border-zinc-800 bg-zinc-900/50'}`}>
+                  <div key={p.name} className={`p-4 rounded-2xl border-2 transition-all ${p.isReady ? 'border-green-500 bg-green-500/10' : 'border-zinc-800 bg-zinc-900/50'}`}>
                     <span className="text-2xl font-bold uppercase">{p.name}</span>
                   </div>
                 ))}
               </div>
+
+              {/* BOTÃO FLUTUANTE QUE NUNCA SOME */}
               {players.length > 0 && players.every(p => p.isReady) && (
-                  <button onClick={iniciarPartidaGlobal} className="mt-10 bg-green-500 text-black font-black px-10 py-4 rounded-full text-xl">COMEÇAR</button>
+                  <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-50">
+                    <button 
+                      onClick={iniciarPartidaGlobal} 
+                      className="bg-green-500 text-black font-black px-12 py-6 rounded-full text-3xl shadow-[0_0_60px_rgba(34,197,94,0.6)] animate-bounce cursor-pointer hover:scale-105 transition-transform"
+                    >
+                      COMEÇAR
+                    </button>
+                  </div>
               )}
             </div>
           )}
