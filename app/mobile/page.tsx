@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
 
-interface Track { id: string; year: string; name: string; artist: string; imageUrl: string; }
+interface Track { id: string; year: string; name: string; artist: string; imageUrl: string; isInitial?: boolean; }
 
 export default function MobilePage() {
   const [name, setName] = useState('');
@@ -52,7 +52,6 @@ export default function MobilePage() {
         channel.send({ type: 'broadcast', event: 'join', payload: { name: name.toUpperCase() } });
         
         if (isReconnect) {
-            // Se for reconexão, avisa a TV pra mandar a timeline e o turno atual imediatamente
             channel.send({ type: 'broadcast', event: 'request-sync', payload: { name: name.toUpperCase() } });
             setReady(true);
         }
@@ -114,7 +113,6 @@ export default function MobilePage() {
           <div className="space-y-3">
               <button onClick={() => entrarNaSala(false)} className="w-full bg-white text-black font-black py-6 rounded-full text-2xl shadow-[0_20px_40px_rgba(255,255,255,0.1)] active:scale-95 transition-all">ENTRAR NA SALA</button>
               
-              {/* BOTÃO DE RECONNECT */}
               {name && roomCode && (
                   <button onClick={() => entrarNaSala(true)} className="w-full bg-green-500/10 text-green-500 border border-green-500/20 font-bold py-4 rounded-full text-sm active:scale-95 transition-all">RECONECTAR COMO {name}</button>
               )}
@@ -153,7 +151,7 @@ export default function MobilePage() {
           <div className="flex flex-col gap-2">
             {timeline.map((track, i) => (
               <Fragment key={track.id}>
-                {/* BOTÃO DO DUPLO CLIQUE ORIGINAL */}
+                
                 <button 
                   onClick={() => confirmarPosicao(i)}
                   onDoubleClick={() => enviarConfirmacaoFinal(i)}
@@ -162,7 +160,8 @@ export default function MobilePage() {
                   <div className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-lg leading-none">+</div>
                 </button>
 
-                <div className="bg-zinc-800 rounded-2xl p-3 flex items-center gap-4 shadow-xl border border-zinc-700">
+                {/* AQUI ESTÁ O SEU OUTLINE (Borda Amarela na Carta Inicial) */}
+                <div className={`bg-zinc-800 rounded-2xl p-3 flex items-center gap-4 shadow-xl border transition-colors ${track.isInitial ? 'border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.3)]' : 'border-zinc-700'}`}>
                   <div className="bg-white text-black font-black px-3 py-1.5 rounded-xl text-xl shadow-inner">{track.year}</div>
                   <img src={track.imageUrl} alt={track.name} className="w-16 h-16 rounded-xl object-cover shadow-md" />
                   <div className="text-left flex-1 min-w-0">
@@ -173,7 +172,6 @@ export default function MobilePage() {
               </Fragment>
             ))}
             
-            {/* ÚLTIMO BOTÃO DO DUPLO CLIQUE ORIGINAL */}
             <button 
               onClick={() => confirmarPosicao(timeline.length)}
               onDoubleClick={() => enviarConfirmacaoFinal(timeline.length)}

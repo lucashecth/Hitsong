@@ -21,7 +21,6 @@ export default function TVPage() {
   const [gameStarted, setGameStarted] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isMounted, setIsMounted] = useState(false);
-  const [usedTrackIds, setUsedTrackIds] = useState<Set<string>>(new Set());
 
   // Estados de Jogo
   const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'winner'>('lobby');
@@ -99,17 +98,7 @@ export default function TVPage() {
       })
       .on('broadcast', { event: 'challenge-made' }, ({ payload }) => {
         processarDesafio(payload.challengerName);
-      })
-      .on('broadcast', { event: 'request-sync' }, ({ payload }) => {
-        // Quando o mobile cai e clica em Reconectar, a TV devolve o estado atual
-        const p = players.find(x => x.name === payload.name);
-        if (p && gameStarted) {
-            channel.send({
-                type: 'broadcast', event: 'game-state',
-                payload: { currentPlayer: players[currentPlayerIndex]?.name, playerTimeline: p.timeline, targetCard: targetCard }
-            });
-        }
-      })
+      });
 
     channel.subscribe();
     channelRef.current = channel;
@@ -143,7 +132,7 @@ export default function TVPage() {
     resolverJogadaReal(pendingMove!.slotIndex, pendingMove!.playerIndex, challengerName);
   };
 
-const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerName: string | null) => {
+  const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerName: string | null) => {
     const activePlayer = players[playerIndex];
     const targetYear = parseInt(targetCard!.year);
     
@@ -152,60 +141,44 @@ const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerNa
     if (slotIndex < activePlayer.timeline.length && parseInt(activePlayer.timeline[slotIndex].year) < targetYear) playerAcertou = false;
 
     let novosJogadores = [...players];
-    let acertouDeFato = false;
 
     if (challengerName) {
       const challengerIndex = novosJogadores.findIndex(p => p.name === challengerName);
       novosJogadores[challengerIndex].tokens -= 1;
 
-        if (!playerAcertou && !challengerName) {
-        pausarMusica(); // Para a música IMEDIATAMENTE no erro
-        tocarSomErro();
-    }
-     else {
-        // Desafiante perdeu a ficha, jogador ativo ganha
-        acertouDeFato = true;
+      if (!playerAcertou) {
+        const correctPos = getCorrectIndex(novosJogadores[challengerIndex].timeline, targetYear);
+        novosJogadores[challengerIndex].timeline.splice(correctPos, 0, targetCard!);
+        novosJogadores[challengerIndex].score += 1;
+        setRevealSuccess(false); // O jogador da vez errou
+      } else {
+        novosJogadores[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
+        novosJogadores[playerIndex].score += 1;
+        setRevealSuccess(true);
       }
     } else {
-      if (playerAcertou) acertouDeFato = true;
-    }
-    setRevealSuccess(playerAcertou || !!challengerName);
-    setRevealSuccess(acertouDeFato);
-    setActionState('revealed');
-    setGameState('playing'); // Sai do modo desafio
-
-    if (!acertouDeFato) tocarSomErro();
-
-    // MANDAR RESULTADO PROS MÓVEIS
-    channelRef.current?.send({ 
-      type: 'broadcast', 
-      event: 'play-result', 
-      payload: { success: acertouDeFato, actualYear: targetCard?.year } 
-    });
-
-    // AGUARDA A ANIMAÇÃO ANTES DE ATUALIZAR A TIMELINE (EVITA DUPLICAÇÃO)
-    setTimeout(() => {
-      let jogadoresAtualizados = [...novosJogadores];
-      
-      if (challengerName && !playerAcertou) {
-        const cIdx = jogadoresAtualizados.findIndex(p => p.name === challengerName);
-        const correctPos = getCorrectIndex(jogadoresAtualizados[cIdx].timeline, targetYear);
-        jogadoresAtualizados[cIdx].timeline.splice(correctPos, 0, targetCard!);
-        jogadoresAtualizados[cIdx].score += 1;
-      } else if (playerAcertou) {
-        jogadoresAtualizados[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
-        jogadoresAtualizados[playerIndex].score += 1;
+      if (playerAcertou) {
+        novosJogadores[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
+        novosJogadores[playerIndex].score += 1;
+        setRevealSuccess(true);
+      } else {
+        setRevealSuccess(false);
+        tocarSomErro();
       }
+    }
 
-      setPlayers(jogadoresAtualizados);
-      checkWinCondition(jogadoresAtualizados);
+    setPlayers(novosJogadores);
+    setActionState('revealed');
+    setGameState('playing');
+    checkWinCondition(novosJogadores);
 
+    setTimeout(() => {
       if (gameState !== 'winner') {
         const next = (playerIndex + 1) % players.length;
-        iniciarTurno(next, jogadoresAtualizados, deck);
+        iniciarTurno(next, novosJogadores, deck);
       }
     }, 6000);
-};
+  };
 
   // --- FUNÇÕES DE APOIO ---
   const criarSala = async () => {
@@ -229,47 +202,29 @@ const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerNa
     setActionState('waiting');
     setRevealSuccess(null);
     setMobileAction(null);
-const availableTracks = currentDeck.filter(t => !usedTrackIds.has(t.id));
-  if (availableTracks.length < 1) return alert("Acervo esgotado!");
-  
-  const target = availableTracks.pop()!;
-  setUsedTrackIds(prev => new Set(prev).add(target.id)); // Marca como usada
-  
-  setDeck(currentDeck.filter(t => t.id !== target.id));
-  setCurrentPlayerIndex(playerIndex);
-  setTargetCard(target);
-  tocarMusica(target.id);
-  
-  // Garante que os dados (name, artist, imageUrl) vão no broadcast
-  channelRef.current?.send({
-    type: 'broadcast', event: 'game-state',
-    payload: { 
-      currentPlayer: currentPlayers[playerIndex].name, 
-      playerTimeline: currentPlayers[playerIndex].timeline, 
-      targetCard: target // Agora envia o objeto completo
-    }
-  });
-};
+    if (currentDeck.length < 1) return;
+    const target = currentDeck.pop()!;
+    setDeck(currentDeck);
+    setCurrentPlayerIndex(playerIndex);
+    setTargetCard(target);
+    tocarMusica(target.id);
+    channelRef.current?.send({
+      type: 'broadcast', event: 'game-state',
+      payload: { currentPlayer: currentPlayers[playerIndex].name, playerTimeline: currentPlayers[playerIndex].timeline, targetCard: { id: target.id } }
+    });
+  };
 
-  const tocarMusica = async (trackId: string, retryCount = 0) => {
+  const tocarMusica = async (trackId: string) => {
     const token = (session as any)?.accessToken;
     if (!token) return;
     try {
       const devicesRes = await fetch('https://api.spotify.com/v1/me/player/devices', { headers: { 'Authorization': `Bearer ${token}` } });
       const devicesData = await devicesRes.json();
       const targetDevice = devicesData.devices?.find((d: any) => d.is_active) || devicesData.devices?.[0];
-      
-      if (!targetDevice) return;
-
-      const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
+      await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
         method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 40000 })
       });
-
-      // Se o Spotify ignorar o play (erro 404/403), tenta de novo 1 segundo depois
-      if (!res.ok && retryCount < 2) {
-         setTimeout(() => tocarMusica(trackId, retryCount + 1), 1000);
-      }
     } catch (e) {}
   };
 
@@ -413,7 +368,7 @@ const availableTracks = currentDeck.filter(t => !usedTrackIds.has(t.id));
               <div className="flex items-end h-[24rem] w-max px-[40vw] gap-4 mx-auto">
                 {players[currentPlayerIndex]?.timeline.map((track, i) => (
                   <Fragment key={track.id}>
-                   <div id={`slot-${i}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === i ? 'w-64' : 'w-8'}`}>
+                    <div id={`slot-${i}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === i ? 'w-48' : 'w-4'}`}>
                       {mobileAction === i && (
                         <div className={`absolute bottom-20 z-30 ${actionState === 'slotted' ? 'anim-drop' : ''} ${actionState === 'revealed' ? 'anim-flip' : ''}`}>
                           {actionState === 'revealed' ? (
@@ -436,19 +391,12 @@ const availableTracks = currentDeck.filter(t => !usedTrackIds.has(t.id));
                 <div id={`slot-${players[currentPlayerIndex]?.timeline.length}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === players[currentPlayerIndex]?.timeline.length ? 'w-48' : 'w-4'}`}>
                   {mobileAction === players[currentPlayerIndex]?.timeline.length && (
                     <div className={`absolute bottom-20 z-30 ${actionState === 'slotted' ? 'anim-drop' : ''} ${actionState === 'revealed' ? 'anim-flip' : ''}`}>
-                      {actionState === 'revealed' && revealSuccess ? (
+                      {actionState === 'revealed' ? (
                         <div className="flex flex-col items-center scale-110">
                           <div className="bg-white text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20 shadow-2xl">{targetCard?.year}</div>
-                          <img src={targetCard?.imageUrl} className="w-40 h-40 rounded-[2rem] border-4 border-green-500 shadow-2xl object-cover" />
-                          {/* ESTA DIV ESTAVA FALTANDO NA ÚLTIMA CARTA! */}
-                          <div className="mt-4 text-center w-40">
-                             <p className="text-base italic text-zinc-300 truncate px-2">{targetCard?.name}</p>
-                             <p className="text-xs font-bold text-zinc-600 truncate uppercase tracking-tighter">{targetCard?.artist}</p>
-                          </div>
+                          <img src={targetCard?.imageUrl} className="w-40 h-40 rounded-[2rem] border-4 border-zinc-500 object-cover" />
                         </div>
-                      ) : (
-                        <CompactDisc />
-                      )}
+                      ) : <CompactDisc />}
                     </div>
                   )}
                 </div>
