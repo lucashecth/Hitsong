@@ -21,6 +21,7 @@ export default function TVPage() {
   const [gameStarted, setGameStarted] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+  const [usedTrackIds, setUsedTrackIds] = useState<Set<string>>(new Set());
 
   // Estados de Jogo
   const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'winner'>('lobby');
@@ -132,7 +133,7 @@ export default function TVPage() {
     resolverJogadaReal(pendingMove!.slotIndex, pendingMove!.playerIndex, challengerName);
   };
 
-  const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerName: string | null) => {
+const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerName: string | null) => {
     const activePlayer = players[playerIndex];
     const targetYear = parseInt(targetCard!.year);
     
@@ -147,18 +148,18 @@ export default function TVPage() {
       const challengerIndex = novosJogadores.findIndex(p => p.name === challengerName);
       novosJogadores[challengerIndex].tokens -= 1;
 
-      if (!playerAcertou) {
-        // Desafiante roubou a carta
-        acertouDeFato = true; // Para mostrar o ano na TV
-        // A carta será inserida no banco de dados local do player apenas no setTimeout abaixo
-      } else {
+        if (!playerAcertou && !challengerName) {
+        pausarMusica(); // Para a música IMEDIATAMENTE no erro
+        tocarSomErro();
+    }
+     else {
         // Desafiante perdeu a ficha, jogador ativo ganha
         acertouDeFato = true;
       }
     } else {
       if (playerAcertou) acertouDeFato = true;
     }
-
+    setRevealSuccess(playerAcertou || !!challengerName);
     setRevealSuccess(acertouDeFato);
     setActionState('revealed');
     setGameState('playing'); // Sai do modo desafio
@@ -218,17 +219,27 @@ export default function TVPage() {
     setActionState('waiting');
     setRevealSuccess(null);
     setMobileAction(null);
-    if (currentDeck.length < 1) return;
-    const target = currentDeck.pop()!;
-    setDeck(currentDeck);
-    setCurrentPlayerIndex(playerIndex);
-    setTargetCard(target);
-    tocarMusica(target.id);
-    channelRef.current?.send({
-      type: 'broadcast', event: 'game-state',
-      payload: { currentPlayer: currentPlayers[playerIndex].name, playerTimeline: currentPlayers[playerIndex].timeline, targetCard: { id: target.id } }
-    });
-  };
+const availableTracks = currentDeck.filter(t => !usedTrackIds.has(t.id));
+  if (availableTracks.length < 1) return alert("Acervo esgotado!");
+  
+  const target = availableTracks.pop()!;
+  setUsedTrackIds(prev => new Set(prev).add(target.id)); // Marca como usada
+  
+  setDeck(currentDeck.filter(t => t.id !== target.id));
+  setCurrentPlayerIndex(playerIndex);
+  setTargetCard(target);
+  tocarMusica(target.id);
+  
+  // Garante que os dados (name, artist, imageUrl) vão no broadcast
+  channelRef.current?.send({
+    type: 'broadcast', event: 'game-state',
+    payload: { 
+      currentPlayer: currentPlayers[playerIndex].name, 
+      playerTimeline: currentPlayers[playerIndex].timeline, 
+      targetCard: target // Agora envia o objeto completo
+    }
+  });
+};
 
   const tocarMusica = async (trackId: string) => {
     const token = (session as any)?.accessToken;
@@ -384,7 +395,7 @@ export default function TVPage() {
               <div className="flex items-end h-[24rem] w-max px-[40vw] gap-4 mx-auto">
                 {players[currentPlayerIndex]?.timeline.map((track, i) => (
                   <Fragment key={track.id}>
-                    <div id={`slot-${i}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === i ? 'w-48' : 'w-4'}`}>
+                   <div id={`slot-${i}`} className={`flex flex-col items-center justify-end relative h-full transition-all duration-700 ${mobileAction === i ? 'w-64' : 'w-8'}`}>
                       {mobileAction === i && (
                         <div className={`absolute bottom-20 z-30 ${actionState === 'slotted' ? 'anim-drop' : ''} ${actionState === 'revealed' ? 'anim-flip' : ''}`}>
                           {actionState === 'revealed' ? (

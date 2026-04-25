@@ -14,9 +14,13 @@ export default function MobilePage() {
   const [tokens, setTokens] = useState(1);
   const [gameState, setGameState] = useState<'lobby' | 'waiting' | 'playing' | 'challenge' | 'result'>('lobby');
   const [challengeTimer, setChallengeTimer] = useState(0);
+  const [holdProgress, setHoldProgress] = useState(0);
+  const holdTimerRef = useRef<NodeJS.Timeout | null>(null);
   
   // A TIMELINE VOLTOU!
   const [timeline, setTimeline] = useState<Track[]>([]);
+
+  const startHold = (index: number) => {
   
   const channelRef = useRef<any>(null);
 
@@ -39,6 +43,7 @@ export default function MobilePage() {
       })
       .on('broadcast', { event: 'play-result' }, () => {
         setGameState('result');
+        
       });
 
     channel.subscribe((status) => {
@@ -47,7 +52,8 @@ export default function MobilePage() {
         setJoined(true);
       }
     });
-
+    localStorage.setItem('h_name', name);
+    localStorage.setItem('h_room', roomCode);
     channelRef.current = channel;
   };
 
@@ -63,6 +69,17 @@ export default function MobilePage() {
     }
   }, [challengeTimer]);
 
+// Efeito para Reconnect Automático
+useEffect(() => {
+    const savedName = localStorage.getItem('h_name');
+    const savedRoom = localStorage.getItem('h_room');
+    if (savedName && savedRoom && !joined) {
+        setName(savedName);
+        setRoomCode(savedRoom);
+        // Opcional: chamar entrarNaSala() automaticamente aqui
+    }
+}, []);
+
   const confirmarPosicao = (index: number) => {
     channelRef.current?.send({ type: 'broadcast', event: 'mobile-action', payload: { slotIndex: index } });
   };
@@ -71,6 +88,26 @@ export default function MobilePage() {
     channelRef.current?.send({ type: 'broadcast', event: 'confirm-play', payload: { slotIndex: index } });
     setGameState('waiting');
   };
+
+// Lógica de Segurar (Lock)
+const startHold = (index: number) => {
+    setHoldProgress(0);
+    holdTimerRef.current = setInterval(() => {
+        setHoldProgress(prev => {
+            if (prev >= 100) {
+                clearInterval(holdTimerRef.current!);
+                enviarConfirmacaoFinal(index); // Trava a jogada
+                return 100;
+            }
+            return prev + 5;
+        });
+    }, 50);
+};
+
+const stopHold = () => {
+    if (holdTimerRef.current) clearInterval(holdTimerRef.current);
+    setHoldProgress(0);
+};
 
   const discordar = () => {
     if (tokens <= 0 || isMyTurn) return;
@@ -138,12 +175,22 @@ export default function MobilePage() {
               <Fragment key={track.id}>
                 {/* BOTÃO DE ESPAÇO */}
                 <button 
-                  onClick={() => confirmarPosicao(i)}
-                  onDoubleClick={() => enviarConfirmacaoFinal(i)}
-                  className="w-full bg-zinc-900 border-2 border-dashed border-zinc-700 py-5 rounded-2xl text-zinc-500 font-black hover:border-green-500 hover:text-green-500 active:bg-green-500 active:text-black transition-all flex items-center justify-center gap-3 shadow-lg"
-                >
-                  <div className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-lg leading-none">+</div>
-                </button>
+  onPointerDown={() => { confirmarPosicao(i); startHold(i); }}
+  onPointerUp={stopHold}
+  onPointerLeave={stopHold}
+  className="relative overflow-hidden w-full bg-zinc-900 border-2 border-dashed border-zinc-700 py-5 rounded-2xl text-zinc-500 font-black hover:border-green-500 transition-all flex items-center justify-center gap-3 shadow-lg select-none touch-none"
+>
+  {/* Barra de Progresso Verde que vai enchendo */}
+  <div 
+    className="absolute bottom-0 left-0 h-2 bg-green-500 transition-all duration-75" 
+    style={{ width: `${holdProgress}%` }} 
+  />
+  
+  {/* O sinal de "+" */}
+  <div className="relative z-10 flex items-center pointer-events-none">
+    <div className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-lg leading-none">+</div>
+  </div>
+</button>
 
                 {/* CARTA DO ÁLBUM */}
                 <div className="bg-zinc-800 rounded-2xl p-3 flex items-center gap-4 shadow-xl border border-zinc-700">
@@ -211,4 +258,5 @@ export default function MobilePage() {
 
     </div>
   );
+  }
 }
