@@ -23,8 +23,8 @@ export default function TVPage() {
   const [usedTrackIds, setUsedTrackIds] = useState<Set<string>>(new Set());
   const [brokenTracks, setBrokenTracks] = useState<string[]>([]); 
 
-  // NOVO ESTADO: 'bonus_speak'
-  const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'bonus_ask' | 'bonus_speak' | 'bonus_vote' | 'winner'>('lobby');
+  // Removido o 'bonus_ask'. Direto pro 'bonus_speak'.
+  const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'bonus_speak' | 'bonus_vote' | 'winner'>('lobby');
   const [winner, setWinner] = useState<Player | null>(null);
   const [challengeTimer, setChallengeTimer] = useState(0); 
   const [pendingMove, setPendingMove] = useState<{ slotIndex: number, playerIndex: number } | null>(null);
@@ -62,7 +62,7 @@ export default function TVPage() {
     return index;
   };
 
-  // TIMERS: Fluxo Perfeito do Bônus
+  // TIMERS DINÂMICOS
   useEffect(() => {
     if (challengeTimer > 0) {
       const timer = setTimeout(() => setChallengeTimer(prev => prev - 1), 1000);
@@ -71,16 +71,13 @@ export default function TVPage() {
       if (gameState === 'challenge') {
         const { pendingMove } = stateRef.current;
         if (pendingMove) resolverJogadaReal(pendingMove.slotIndex, pendingMove.playerIndex, null);
-      } else if (gameState === 'bonus_ask') {
-        setGameState('playing');
-        revelarEPassarVez(stateRef.current.pendingMove!, true, false);
       } else if (gameState === 'bonus_speak') {
-        // Acabou o tempo de falar! Revela a carta e abre a votação.
+        // Acabou os 10s de falar. Revela e abre 5s de votação!
         setGameState('bonus_vote');
-        setChallengeTimer(10); // 10s para os outros votarem
+        setChallengeTimer(5); 
         setVotes([]);
         setActionState('revealed'); 
-        setRevealSuccess(true); // Fica com borda verde pq ele acertou o ano
+        setRevealSuccess(true); 
         channelRef.current?.send({ type: 'broadcast', event: 'start-voting', payload: { playerName: stateRef.current.players[stateRef.current.currentPlayerIndex].name } });
       } else if (gameState === 'bonus_vote') {
         processarVotosBonus();
@@ -128,18 +125,6 @@ export default function TVPage() {
         setChallengeTimer(-1);
         resolverJogadaReal(stateRef.current.pendingMove.slotIndex, stateRef.current.pendingMove.playerIndex, payload.challengerName);
       })
-      .on('broadcast', { event: 'bonus-response' }, ({ payload }) => {
-        if (stateRef.current.gameState !== 'bonus_ask') return;
-        setChallengeTimer(-1);
-        if (payload.knows) {
-          // O Cara disse que sabe! Dá 10 segundos pra ele falar.
-          setGameState('bonus_speak');
-          setChallengeTimer(10);
-        } else {
-          setGameState('playing');
-          revelarEPassarVez(stateRef.current.pendingMove!, true, false);
-        }
-      })
       .on('broadcast', { event: 'vote-cast' }, ({ payload }) => {
         if (stateRef.current.gameState !== 'bonus_vote') return;
         setVotes(prev => [...prev.filter(v => v.name !== payload.name), { name: payload.name, vote: payload.vote }]);
@@ -169,11 +154,13 @@ export default function TVPage() {
     if (slotIndex > 0 && parseInt(activePlayer.timeline[slotIndex - 1].year) > targetYear) playerAcertou = false;
     if (slotIndex < activePlayer.timeline.length && parseInt(activePlayer.timeline[slotIndex].year) < targetYear) playerAcertou = false;
 
+    // SE ACERTOU E NINGUÉM ROUBOU, VAI DIRETO PRO BÔNUS!
     if (playerAcertou && !challengerName) {
       resolvingRef.current = false; 
-      setGameState('bonus_ask');
-      setChallengeTimer(5);
-      channelRef.current?.send({ type: 'broadcast', event: 'ask-bonus', payload: { trackId: targetCard?.id } });
+      setGameState('bonus_speak');
+      setChallengeTimer(10); // 10 segundos pra falar
+      // Força os celulares irem para a tela "Olhe para a TV" enquanto o cara fala
+      channelRef.current?.send({ type: 'broadcast', event: 'play-result', payload: { success: true, actualYear: targetCard?.year } });
       return;
     }
 
@@ -195,7 +182,7 @@ export default function TVPage() {
     }
 
     setPlayers(novosJogadores);
-    setGameState('playing'); 
+    setGameState('playing'); // Corrige o bug da barra presa!
 
     setTimeout(() => {
       let updated = [...stateRef.current.players];
@@ -233,8 +220,10 @@ export default function TVPage() {
     if (stateRef.current.gameState !== 'bonus_vote') setStatusText(msg);
     
     if (!playerAcertou && !isChallenge) { pausarMusica(); tocarSomErro(); }
+    
     setRevealSuccess(finalSuccess);
     setActionState('revealed');
+    setGameState('playing'); // Corrige o bug da barra presa!
 
     channelRef.current?.send({ type: 'broadcast', event: 'play-result', payload: { success: finalSuccess, actualYear: targetCard?.year } });
 
@@ -449,7 +438,6 @@ export default function TVPage() {
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
 
-      {/* HEADER */}
       <div className="w-full bg-zinc-900/40 backdrop-blur-md px-8 py-4 flex justify-between items-center border-b border-zinc-800/50 z-50 flex-shrink-0">
         <div className="flex items-center gap-4">
           <div className="w-2 h-2 bg-green-500 rounded-full animate-ping"></div>
@@ -500,11 +488,9 @@ export default function TVPage() {
           </div>
 
           <div className="flex-1 flex flex-col relative">
-            {/* TÍTULOS DINÂMICOS NA TV */}
-            <div className={`w-full py-8 text-center z-20 transition-colors duration-500 ${gameState === 'challenge' ? 'bg-amber-500 text-black' : gameState === 'bonus_ask' || gameState === 'bonus_speak' || gameState === 'bonus_vote' ? 'bg-blue-600 text-white shadow-lg' : actionState === 'revealed' ? (revealSuccess ? 'bg-green-600' : 'bg-red-600') : 'bg-transparent'}`}>
+            <div className={`w-full py-8 text-center z-20 transition-colors duration-500 ${gameState === 'challenge' ? 'bg-amber-500 text-black' : gameState === 'bonus_speak' || gameState === 'bonus_vote' ? 'bg-blue-600 text-white shadow-lg' : actionState === 'revealed' ? (revealSuccess ? 'bg-green-600' : 'bg-red-600') : 'bg-transparent'}`}>
               <h1 className="text-5xl font-black uppercase tracking-tighter">
                 {gameState === 'challenge' ? `DISCORDAR? (${challengeTimer}s)` 
-                : gameState === 'bonus_ask' ? `SABE O NOME DA MÚSICA? (${challengeTimer}s)` 
                 : gameState === 'bonus_speak' ? `FALE O NOME E CANTOR! (${challengeTimer}s)` 
                 : gameState === 'bonus_vote' ? `VOTAÇÃO PÚBLICA! (${challengeTimer}s)` 
                 : actionState === 'revealed' ? statusText 

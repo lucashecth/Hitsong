@@ -13,10 +13,10 @@ export default function MobilePage() {
   const [isMyTurn, setIsMyTurn] = useState(false);
   const [tokens, setTokens] = useState(1);
   
-  // Atualizado com os novos estados do Bônus
-  const [gameState, setGameState] = useState<'lobby' | 'waiting' | 'playing' | 'challenge' | 'result' | 'bonus_ask' | 'bonus_vote'>('lobby');
+  // Estado limpo sem 'bonus_ask'
+  const [gameState, setGameState] = useState<'lobby' | 'waiting' | 'playing' | 'challenge' | 'result' | 'bonus_vote'>('lobby');
   const [challengeTimer, setChallengeTimer] = useState(0);
-  const [bonusPlayerName, setBonusPlayerName] = useState(''); // Guarda o nome de quem está sendo julgado
+  const [bonusPlayerName, setBonusPlayerName] = useState(''); 
   
   const [timeline, setTimeline] = useState<Track[]>([]);
   const channelRef = useRef<any>(null);
@@ -47,11 +47,8 @@ export default function MobilePage() {
         setGameState('challenge');
       })
       .on('broadcast', { event: 'play-result' }, () => {
+        // Isso é ativado logo que a pessoa acerta para mostrar "Olhe para a TV" enquanto ela fala
         setGameState('result');
-      })
-      // NOVOS OUVINTES DO BÔNUS
-      .on('broadcast', { event: 'ask-bonus' }, () => {
-        setGameState('bonus_ask');
       })
       .on('broadcast', { event: 'start-voting' }, ({ payload }) => {
         setBonusPlayerName(payload.playerName);
@@ -104,18 +101,10 @@ export default function MobilePage() {
     setGameState('waiting');
   };
 
-  // NOVAS FUNÇÕES DO BÔNUS
-  const responderBonus = (knows: boolean) => {
-    channelRef.current?.send({ type: 'broadcast', event: 'bonus-response', payload: { knows } });
-    setGameState('waiting');
-  };
-
   const votarBonus = (vote: boolean) => {
     channelRef.current?.send({ type: 'broadcast', event: 'vote-cast', payload: { name, vote } });
     setGameState('waiting'); // Esconde os botões pra não votar duas vezes
   };
-
-  // --- INTERFACE ---
 
   if (!joined) {
     return (
@@ -158,18 +147,17 @@ export default function MobilePage() {
     );
   }
 
-  // Cor de fundo dinâmica dependendo da fase
   const getBgColor = () => {
     if (gameState === 'challenge') return 'bg-amber-500';
-    if (gameState === 'bonus_ask' || gameState === 'bonus_vote') return 'bg-blue-600';
+    if (gameState === 'bonus_vote') return 'bg-blue-600';
     return 'bg-zinc-950';
   };
 
   return (
     <div className={`min-h-screen flex flex-col p-6 transition-all duration-700 ${getBgColor()} ${gameState !== 'playing' ? 'justify-center text-center' : 'justify-start'}`}>
       
-      {/* ESPERANDO TURNO (Se estende para quando você não pode agir no bônus) */}
-      {(gameState === 'waiting' || (gameState === 'bonus_ask' && !isMyTurn) || (gameState === 'bonus_vote' && isMyTurn)) && (
+      {/* ESPERANDO TURNO */}
+      {(gameState === 'waiting' || (gameState === 'bonus_vote' && isMyTurn)) && (
         <div className="flex-1 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
           <div className="w-16 h-16 border-4 border-zinc-800 border-t-white rounded-full animate-spin mx-auto mb-6 opacity-50"></div>
           <p className="text-white/60 font-bold uppercase tracking-widest text-sm">Aguarde...</p>
@@ -249,20 +237,6 @@ export default function MobilePage() {
         </div>
       )}
 
-      {/* TELA DE BÔNUS: PERGUNTA PARA O JOGADOR DA VEZ */}
-      {gameState === 'bonus_ask' && isMyTurn && (
-        <div className="w-full max-w-sm mx-auto flex flex-col items-center animate-in zoom-in duration-300">
-          <div className="mb-12">
-            <p className="text-white font-black uppercase tracking-tighter text-3xl mb-4 leading-none">VOCÊ SABE O NOME DA MÚSICA E O CANTOR?</p>
-            <p className="text-white/80 font-bold text-sm">Responda para tentar ganhar uma ficha extra!</p>
-          </div>
-          <div className="flex gap-4 w-full">
-            <button onClick={() => responderBonus(false)} className="flex-1 py-10 rounded-3xl bg-black/40 text-white font-black text-2xl active:scale-95 transition-all">NÃO</button>
-            <button onClick={() => responderBonus(true)} className="flex-1 py-10 rounded-3xl bg-white text-blue-600 shadow-2xl font-black text-2xl active:scale-95 transition-all">SIM</button>
-          </div>
-        </div>
-      )}
-
       {/* TELA DE BÔNUS: VOTAÇÃO DA PLATEIA */}
       {gameState === 'bonus_vote' && !isMyTurn && (
         <div className="w-full max-w-sm mx-auto flex flex-col items-center animate-in zoom-in duration-300">
@@ -280,7 +254,10 @@ export default function MobilePage() {
       {/* OLHE PARA A TV */}
       {gameState === 'result' && (
         <div className="flex-1 flex items-center justify-center animate-bounce">
-            <h2 className="text-5xl font-black text-white uppercase tracking-tighter italic">Olhe para a TV!</h2>
+            <h2 className="text-5xl font-black text-white uppercase tracking-tighter italic text-center">
+              Olhe para a TV!<br/>
+              <span className="text-xl font-normal text-zinc-500 not-italic mt-4 block">(Aguarde o gabarito)</span>
+            </h2>
         </div>
       )}
     </div>
