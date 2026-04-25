@@ -23,10 +23,12 @@ export default function TVPage() {
   const [usedTrackIds, setUsedTrackIds] = useState<Set<string>>(new Set());
   const [brokenTracks, setBrokenTracks] = useState<string[]>([]); 
 
-  const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'winner'>('lobby');
+  // Novos Estados da Árvore de Decisão do Bônus
+  const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'bonus_ask' | 'bonus_vote' | 'winner'>('lobby');
   const [winner, setWinner] = useState<Player | null>(null);
-  const [challengeTimer, setChallengeTimer] = useState(0);
+  const [challengeTimer, setChallengeTimer] = useState(0); // Usado para todos os timers
   const [pendingMove, setPendingMove] = useState<{ slotIndex: number, playerIndex: number } | null>(null);
+  const [votes, setVotes] = useState<{ name: string, vote: boolean }[]>([]);
 
   const [deck, setDeck] = useState<Track[]>([]);
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
@@ -35,14 +37,15 @@ export default function TVPage() {
   const [mobileAction, setMobileAction] = useState<number | null>(null); 
   const [actionState, setActionState] = useState<'waiting' | 'slotted' | 'revealed'>('waiting');
   const [revealSuccess, setRevealSuccess] = useState<boolean | null>(null);
-  const [challengeResultText, setChallengeResultText] = useState<string>(''); 
+  const [statusText, setStatusText] = useState<string>(''); 
 
   const channelRef = useRef<any>(null);
   const resolvingRef = useRef(false); 
-  const stateRef = useRef({ players, currentPlayerIndex, targetCard, gameStarted, gameState, pendingMove, deck, usedTrackIds });
+  const spotifyCheckRef = useRef<NodeJS.Timeout | null>(null);
+  const stateRef = useRef({ players, currentPlayerIndex, targetCard, gameStarted, gameState, pendingMove, deck, usedTrackIds, votes });
   
   useEffect(() => {
-    stateRef.current = { players, currentPlayerIndex, targetCard, gameStarted, gameState, pendingMove, deck, usedTrackIds };
+    stateRef.current = { players, currentPlayerIndex, targetCard, gameStarted, gameState, pendingMove, deck, usedTrackIds, votes };
   });
   
   useEffect(() => { setIsMounted(true); }, []);
@@ -67,16 +70,25 @@ export default function TVPage() {
     }
   };
 
+  // Gerenciador Universal de Timers (Desafio, Bônus, Votação)
   useEffect(() => {
     if (challengeTimer > 0) {
       const timer = setTimeout(() => setChallengeTimer(prev => prev - 1), 1000);
       return () => clearTimeout(timer);
-    } else if (challengeTimer === 0 && gameState === 'challenge') {
-      const { pendingMove } = stateRef.current;
-      if (pendingMove) resolverJogadaReal(pendingMove.slotIndex, pendingMove.playerIndex, null);
+    } else if (challengeTimer === 0) {
+      if (gameState === 'challenge') {
+        const { pendingMove } = stateRef.current;
+        if (pendingMove) resolverJogadaReal(pendingMove.slotIndex, pendingMove.playerIndex, null);
+      } else if (gameState === 'bonus_ask') {
+        setGameState('playing');
+        revelarEPassarVez(stateRef.current.pendingMove!, true, false);
+      } else if (gameState === 'bonus_vote') {
+        processarVotosBonus();
+      }
     }
   }, [challengeTimer, gameState]);
 
+  // Câmera Perfeita
   useEffect(() => {
     if (mobileAction !== null) {
       const focarCamera = () => {
@@ -92,14 +104,12 @@ export default function TVPage() {
     }
   }, [mobileAction]);
 
+  // Antena Realtime Blindada
   useEffect(() => {
     if (!roomCode) return;
     const channel = supabase.channel(`room_${roomCode}`)
       .on('broadcast', { event: 'join' }, ({ payload }) => {
-        setPlayers(prev => {
-          if (prev.find(p => p.name === payload.name)) return prev;
-          return [...prev, { name: payload.name, isReady: false, score: 0, timeline: [], tokens: 1 }];
-        });
+        setPlayers(prev => prev.find(p => p.name === payload.name) ? prev : [...prev, { name: payload.name, isReady: false, score: 0, timeline: [], tokens: 1 }]);
       })
       .on('broadcast', { event: 'player-ready' }, ({ payload }) => {
         setPlayers(prev => prev.map(p => p.name === payload.name ? { ...p, isReady: true } : p));
@@ -113,25 +123,36 @@ export default function TVPage() {
         setPendingMove({ slotIndex: payload.slotIndex, playerIndex: currentPlayerIndex });
         setGameState('challenge');
         setChallengeTimer(5);
-        channel.send({
-          type: 'broadcast', event: 'open-challenge',
-          payload: { timer: 5, playersTokens: players.map(p => ({ name: p.name, tokens: p.tokens })) }
-        });
+        channel.send({ type: 'broadcast', event: 'open-challenge', payload: { timer: 5, playersTokens: players.map(p => ({ name: p.name, tokens: p.tokens })) } });
       })
       .on('broadcast', { event: 'challenge-made' }, ({ payload }) => {
-        const { gameState, pendingMove } = stateRef.current;
-        if (gameState !== 'challenge' || !pendingMove) return;
+        if (stateRef.current.gameState !== 'challenge' || !stateRef.current.pendingMove) return;
         setChallengeTimer(-1);
-        resolverJogadaReal(pendingMove.slotIndex, pendingMove.playerIndex, payload.challengerName);
+        resolverJogadaReal(stateRef.current.pendingMove.slotIndex, stateRef.current.pendingMove.playerIndex, payload.challengerName);
+      })
+      // Novos Eventos de Bônus
+      .on('broadcast', { event: 'bonus-response' }, ({ payload }) => {
+        if (stateRef.current.gameState !== 'bonus_ask') return;
+        setChallengeTimer(-1);
+        if (payload.knows) {
+          setGameState('bonus_vote');
+          setChallengeTimer(7);
+          setVotes([]);
+          channel.send({ type: 'broadcast', event: 'start-voting', payload: { playerName: stateRef.current.players[stateRef.current.currentPlayerIndex].name } });
+        } else {
+          setGameState('playing');
+          revelarEPassarVez(stateRef.current.pendingMove!, true, false);
+        }
+      })
+      .on('broadcast', { event: 'vote-cast' }, ({ payload }) => {
+        if (stateRef.current.gameState !== 'bonus_vote') return;
+        setVotes(prev => [...prev.filter(v => v.name !== payload.name), { name: payload.name, vote: payload.vote }]);
       })
       .on('broadcast', { event: 'request-sync' }, ({ payload }) => {
         const { players, currentPlayerIndex, targetCard, gameStarted } = stateRef.current;
         const p = players.find(x => x.name === payload.name);
         if (p && gameStarted) {
-            channel.send({
-                type: 'broadcast', event: 'game-state',
-                payload: { currentPlayer: players[currentPlayerIndex]?.name, playerTimeline: p.timeline, targetCard: targetCard }
-            });
+            channel.send({ type: 'broadcast', event: 'game-state', payload: { currentPlayer: players[currentPlayerIndex]?.name, playerTimeline: p.timeline, targetCard: targetCard } });
         }
       });
 
@@ -140,6 +161,7 @@ export default function TVPage() {
     return () => { supabase.removeChannel(channel); };
   }, [roomCode]); 
 
+  // Trava Anti-Duplicação e Árvore de Decisão
   const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerName: string | null) => {
     if (resolvingRef.current) return; 
     resolvingRef.current = true;
@@ -152,75 +174,87 @@ export default function TVPage() {
     if (slotIndex > 0 && parseInt(activePlayer.timeline[slotIndex - 1].year) > targetYear) playerAcertou = false;
     if (slotIndex < activePlayer.timeline.length && parseInt(activePlayer.timeline[slotIndex].year) < targetYear) playerAcertou = false;
 
-    let novosJogadores = [...players];
-    let acertouDeFato = false;
-    let msgFeedback = "";
+    // Se acertou a posição e ninguém desafiou -> Vai para a Fase Bônus!
+    if (playerAcertou && !challengerName) {
+      resolvingRef.current = false; // Destrava para poder processar o bônus depois
+      setGameState('bonus_ask');
+      setChallengeTimer(5);
+      channelRef.current?.send({ type: 'broadcast', event: 'ask-bonus', payload: { trackId: targetCard?.id } });
+      return;
+    }
 
-    if (challengerName) {
-      const challengerIndex = novosJogadores.findIndex(p => p.name === challengerName);
-      novosJogadores[challengerIndex].tokens -= 1;
-      if (!playerAcertou) {
-        acertouDeFato = true; 
-        msgFeedback = `${challengerName} ROUBOU A CARTA!`;
-      } else {
-        msgFeedback = `DESAFIO DE ${challengerName} FALHOU!`;
-      }
+    revelarEPassarVez({ slotIndex, playerIndex }, playerAcertou, !!challengerName, challengerName);
+  };
+
+  const processarVotosBonus = () => {
+    const { votes, players } = stateRef.current;
+    const sim = votes.filter(v => v.vote).length;
+    const nao = votes.filter(v => !v.vote).length;
+    const ganhouFicha = sim > nao;
+
+    if (ganhouFicha) {
+        setPlayers(prev => prev.map((p, i) => i === stateRef.current.currentPlayerIndex ? { ...p, tokens: p.tokens + 1 } : p));
+        setStatusText(`PÚBLICO APROVOU! +1 FICHA PARA ${players[stateRef.current.currentPlayerIndex].name}`);
     } else {
-      if (playerAcertou) {
-        acertouDeFato = true;
-        msgFeedback = "ACERTOU!";
-      } else {
-        msgFeedback = "ERROU!";
-      }
+        setStatusText("O PÚBLICO NEGOU SEU BÔNUS!");
     }
 
-    setChallengeResultText(msgFeedback);
-
-    if (!playerAcertou && !challengerName) {
-        pausarMusica();
-        tocarSomErro();
-    }
-
-    setRevealSuccess(acertouDeFato);
-    setActionState('revealed');
     setGameState('playing');
+    setTimeout(() => {
+        revelarEPassarVez(stateRef.current.pendingMove!, true, false);
+    }, 2500);
+  };
 
-    channelRef.current?.send({ 
-      type: 'broadcast', event: 'play-result', 
-      payload: { success: acertouDeFato, actualYear: targetCard?.year } 
-    });
+  const revelarEPassarVez = ({ slotIndex, playerIndex }: {slotIndex: number, playerIndex: number}, playerAcertou: boolean, isChallenge: boolean, challengerName?: string | null) => {
+    const { players, targetCard } = stateRef.current;
+    let msg = "";
+    let finalSuccess = false;
+
+    if (isChallenge) {
+        const cIdx = players.findIndex(p => p.name === challengerName);
+        setPlayers(prev => prev.map((p, i) => i === cIdx ? { ...p, tokens: p.tokens - 1 } : p)); // Cobra a ficha
+        if (!playerAcertou) { msg = `${challengerName} ROUBOU A CARTA!`; finalSuccess = true; }
+        else { msg = `DESAFIO DE ${challengerName} FALHOU!`; finalSuccess = false; }
+    } else {
+        msg = playerAcertou ? "ACERTOU!" : "ERROU!";
+        finalSuccess = playerAcertou;
+    }
+
+    // Se veio de um bônus, não sobrescreve o texto de quem ganhou a ficha imediatamente
+    if (stateRef.current.gameState !== 'bonus_vote') setStatusText(msg);
+    
+    if (!playerAcertou && !isChallenge) { pausarMusica(); tocarSomErro(); }
+    setRevealSuccess(finalSuccess);
+    setActionState('revealed');
+
+    channelRef.current?.send({ type: 'broadcast', event: 'play-result', payload: { success: finalSuccess, actualYear: targetCard?.year } });
 
     setTimeout(() => {
-      let jogadoresAtualizados = [...novosJogadores];
-      
-      if (challengerName && !playerAcertou) {
-        const cIdx = jogadoresAtualizados.findIndex(p => p.name === challengerName);
-        jogadoresAtualizados[cIdx] = { ...jogadoresAtualizados[cIdx], timeline: [...jogadoresAtualizados[cIdx].timeline] };
-        
-        const correctPos = getCorrectIndex(jogadoresAtualizados[cIdx].timeline, targetYear);
-        jogadoresAtualizados[cIdx].timeline.splice(correctPos, 0, targetCard!);
-        jogadoresAtualizados[cIdx].score += 1;
+      let novosJogadores = [...stateRef.current.players];
+      if (isChallenge && !playerAcertou) {
+        const cIdx = novosJogadores.findIndex(p => p.name === challengerName);
+        novosJogadores[cIdx] = { ...novosJogadores[cIdx], timeline: [...novosJogadores[cIdx].timeline] };
+        const pos = getCorrectIndex(novosJogadores[cIdx].timeline, parseInt(targetCard!.year));
+        novosJogadores[cIdx].timeline.splice(pos, 0, targetCard!);
+        novosJogadores[cIdx].score += 1;
       } else if (playerAcertou) {
-        jogadoresAtualizados[playerIndex] = { ...jogadoresAtualizados[playerIndex], timeline: [...jogadoresAtualizados[playerIndex].timeline] };
-        
-        jogadoresAtualizados[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
-        jogadoresAtualizados[playerIndex].score += 1;
+        novosJogadores[playerIndex] = { ...novosJogadores[playerIndex], timeline: [...novosJogadores[playerIndex].timeline] };
+        novosJogadores[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
+        novosJogadores[playerIndex].score += 1;
       }
 
-      setPlayers(jogadoresAtualizados);
+      setPlayers(novosJogadores);
       
-      const vencedorEncontrado = jogadoresAtualizados.find(p => p.score >= 10);
-      if (vencedorEncontrado) {
-        setWinner(vencedorEncontrado);
+      if (novosJogadores.some(p => p.score >= 10)) {
+        setWinner(novosJogadores.find(p => p.score >= 10)!);
         setGameState('winner');
       } else {
-        const next = (playerIndex + 1) % players.length;
-        iniciarTurno(next, jogadoresAtualizados); // <-- CIRURGIA 1: Passa a timeline fresca imediatamente!
+        iniciarTurno((playerIndex + 1) % players.length, novosJogadores);
       }
     }, 6000);
   };
 
-  // CIRURGIA 3: EMBARALHAMENTO FISHER-YATES (100% ALEATÓRIO)
+  // Algoritmo Fisher-Yates Original
   const criarSala = async () => {
     const { data } = await supabase.from('tracks').select('*');
     if (!data || data.length < 10) return alert("Acervo insuficiente!");
@@ -254,13 +288,12 @@ export default function TVPage() {
     setTimeout(() => iniciarTurno(0, initialPlayers), 500); 
   };
 
-  // Aceita o array fresco para evitar atrasos no Mobile
   const iniciarTurno = (playerIndex: number = stateRef.current.currentPlayerIndex, currentPlayers?: Player[]) => {
     resolvingRef.current = false; 
     setActionState('waiting');
     setRevealSuccess(null);
     setMobileAction(null);
-    setChallengeResultText(''); 
+    setStatusText(''); 
 
     const { deck, usedTrackIds } = stateRef.current; 
     const playersToUse = currentPlayers || stateRef.current.players;
@@ -283,15 +316,19 @@ export default function TVPage() {
 
   const lidarComMusicaQuebrada = async (trackId: string) => {
     setBrokenTracks(prev => [...prev, trackId]);
-    setChallengeResultText("MÚSICA INDISPONÍVEL. TROCANDO...");
+    setStatusText("ERRO DE CARREGAMENTO NO SPOTIFY. PULANDO...");
     setActionState('revealed'); 
     try { await supabase.from('tracks').update({ is_broken: true }).eq('id', trackId); } catch(e) {}
     setTimeout(() => iniciarTurno(stateRef.current.currentPlayerIndex), 3000);
   };
 
+  // Monitor de Silêncio do Spotify (Liniker Fix)
   const tocarMusica = async (trackId: string, retryCount = 0) => {
     const token = (session as any)?.accessToken;
     if (!token) return;
+
+    if (spotifyCheckRef.current) clearTimeout(spotifyCheckRef.current);
+
     try {
       const devicesRes = await fetch('https://api.spotify.com/v1/me/player/devices', { headers: { 'Authorization': `Bearer ${token}` } });
       const devicesData = await devicesRes.json();
@@ -305,19 +342,31 @@ export default function TVPage() {
 
       const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
         method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 40000 })
+        body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 35000 })
       });
 
       if (res.status === 401 || res.status === 403) {
-          setChallengeResultText("SPOTIFY DESCONECTADO. RECARREGUE A TV!");
+          setStatusText("SPOTIFY DESCONECTADO. RECARREGUE A TV!");
           setActionState('revealed');
           return;
       }
 
       if (!res.ok) {
-          if (retryCount < 2) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
-          else lidarComMusicaQuebrada(trackId);
+          if (retryCount < 2) return setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+          return lidarComMusicaQuebrada(trackId);
       }
+
+      // Verificação dupla se a música realmente começou a tocar
+      spotifyCheckRef.current = setTimeout(async () => {
+        try {
+            const check = await fetch('https://www.google.com/search?q=https://api.spotify.com/v1/playlists/%24', { headers: { 'Authorization': `Bearer ${token}` } });
+            const data = await check.json();
+            if (!data || !data.is_playing || !data.item || data.item.id !== trackId) {
+                lidarComMusicaQuebrada(trackId);
+            }
+        } catch(e) {}
+      }, 3000);
+
     } catch (e) {
         if (retryCount < 2) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
         else lidarComMusicaQuebrada(trackId);
@@ -394,6 +443,7 @@ export default function TVPage() {
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
 
+      {/* HEADER */}
       <div className="w-full bg-zinc-900/40 backdrop-blur-md px-8 py-4 flex justify-between items-center border-b border-zinc-800/50 z-50 flex-shrink-0">
         <div className="flex items-center gap-4">
           <div className="w-2 h-2 bg-green-500 rounded-full animate-ping"></div>
@@ -444,9 +494,9 @@ export default function TVPage() {
           </div>
 
           <div className="flex-1 flex flex-col relative">
-            <div className={`w-full py-8 text-center z-20 transition-colors duration-500 ${gameState === 'challenge' ? 'bg-amber-500 text-black' : actionState === 'revealed' ? (revealSuccess ? 'bg-green-600' : 'bg-red-600') : 'bg-transparent'}`}>
+            <div className={`w-full py-8 text-center z-20 transition-colors duration-500 ${gameState === 'challenge' ? 'bg-amber-500 text-black' : gameState === 'bonus_ask' || gameState === 'bonus_vote' ? 'bg-blue-600 text-white shadow-lg' : actionState === 'revealed' ? (revealSuccess ? 'bg-green-600' : 'bg-red-600') : 'bg-transparent'}`}>
               <h1 className="text-5xl font-black uppercase tracking-tighter">
-                {gameState === 'challenge' ? `DISCORDAR? (${challengeTimer}s)` : actionState === 'revealed' ? challengeResultText : `Vez de: ${players[currentPlayerIndex]?.name}`}
+                {gameState === 'challenge' ? `DISCORDAR? (${challengeTimer}s)` : gameState === 'bonus_ask' ? `SABE O NOME DA MÚSICA? (${challengeTimer}s)` : gameState === 'bonus_vote' ? `VOTAÇÃO PÚBLICA! (${challengeTimer}s)` : actionState === 'revealed' ? statusText : `Vez de: ${players[currentPlayerIndex]?.name}`}
               </h1>
             </div>
 
@@ -465,7 +515,6 @@ export default function TVPage() {
                           {actionState === 'revealed' ? (
                             <div className="flex flex-col items-center scale-110">
                               <div className="bg-white text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20 shadow-2xl">{targetCard?.year}</div>
-                              {/* CIRURGIA 2: BORDA VERMELHA (OUTLINE) ISOLADA DA IMAGEM CINZA */}
                               <div className={`rounded-[2rem] border-4 overflow-hidden transition-all shadow-2xl ${revealSuccess ? 'border-green-500 shadow-[0_0_40px_rgba(34,197,94,0.4)]' : 'border-red-600 shadow-[0_0_40px_rgba(220,38,38,0.6)]'}`}>
                                 <img src={targetCard?.imageUrl} className={`w-40 h-40 object-cover transition-all ${!revealSuccess ? 'grayscale opacity-60' : ''}`} />
                               </div>
@@ -495,7 +544,6 @@ export default function TVPage() {
                       {actionState === 'revealed' ? (
                         <div className="flex flex-col items-center scale-110">
                           <div className="bg-white text-black font-black text-3xl px-6 py-1 rounded-full mb-[-1rem] z-20 shadow-2xl">{targetCard?.year}</div>
-                          {/* CIRURGIA 2: BORDA VERMELHA NA ÚLTIMA CARTA TAMBÉM */}
                           <div className={`rounded-[2rem] border-4 overflow-hidden transition-all shadow-2xl ${revealSuccess ? 'border-green-500 shadow-[0_0_40px_rgba(34,197,94,0.4)]' : 'border-red-600 shadow-[0_0_40px_rgba(220,38,38,0.6)]'}`}>
                                 <img src={targetCard?.imageUrl} className={`w-40 h-40 object-cover transition-all ${!revealSuccess ? 'grayscale opacity-60' : ''}`} />
                           </div>

@@ -12,8 +12,11 @@ export default function MobilePage() {
   
   const [isMyTurn, setIsMyTurn] = useState(false);
   const [tokens, setTokens] = useState(1);
-  const [gameState, setGameState] = useState<'lobby' | 'waiting' | 'playing' | 'challenge' | 'result'>('lobby');
+  
+  // Atualizado com os novos estados do Bônus
+  const [gameState, setGameState] = useState<'lobby' | 'waiting' | 'playing' | 'challenge' | 'result' | 'bonus_ask' | 'bonus_vote'>('lobby');
   const [challengeTimer, setChallengeTimer] = useState(0);
+  const [bonusPlayerName, setBonusPlayerName] = useState(''); // Guarda o nome de quem está sendo julgado
   
   const [timeline, setTimeline] = useState<Track[]>([]);
   const channelRef = useRef<any>(null);
@@ -45,8 +48,17 @@ export default function MobilePage() {
       })
       .on('broadcast', { event: 'play-result' }, () => {
         setGameState('result');
+      })
+      // NOVOS OUVINTES DO BÔNUS
+      .on('broadcast', { event: 'ask-bonus' }, () => {
+        setGameState('bonus_ask');
+      })
+      .on('broadcast', { event: 'start-voting' }, ({ payload }) => {
+        setBonusPlayerName(payload.playerName);
+        setGameState('bonus_vote');
       });
-channel.subscribe((status) => {
+
+    channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         channel.send({ type: 'broadcast', event: 'join', payload: { name: name.toUpperCase() } });
         
@@ -64,10 +76,10 @@ channel.subscribe((status) => {
     channelRef.current = channel;
   };
 
-const sinalizarPronto = () => {
+  const sinalizarPronto = () => {
     channelRef.current?.send({ type: 'broadcast', event: 'player-ready', payload: { name: name.toUpperCase() } });
     setReady(true);
-    setGameState('waiting'); // <- Essa linha impede a tela preta
+    setGameState('waiting');
   };
 
   useEffect(() => {
@@ -91,6 +103,19 @@ const sinalizarPronto = () => {
     channelRef.current?.send({ type: 'broadcast', event: 'challenge-made', payload: { challengerName: name } });
     setGameState('waiting');
   };
+
+  // NOVAS FUNÇÕES DO BÔNUS
+  const responderBonus = (knows: boolean) => {
+    channelRef.current?.send({ type: 'broadcast', event: 'bonus-response', payload: { knows } });
+    setGameState('waiting');
+  };
+
+  const votarBonus = (vote: boolean) => {
+    channelRef.current?.send({ type: 'broadcast', event: 'vote-cast', payload: { name, vote } });
+    setGameState('waiting'); // Esconde os botões pra não votar duas vezes
+  };
+
+  // --- INTERFACE ---
 
   if (!joined) {
     return (
@@ -133,19 +158,28 @@ const sinalizarPronto = () => {
     );
   }
 
+  // Cor de fundo dinâmica dependendo da fase
+  const getBgColor = () => {
+    if (gameState === 'challenge') return 'bg-amber-500';
+    if (gameState === 'bonus_ask' || gameState === 'bonus_vote') return 'bg-blue-600';
+    return 'bg-zinc-950';
+  };
+
   return (
-    <div className={`min-h-screen flex flex-col p-6 transition-all duration-700 ${gameState === 'challenge' ? 'bg-amber-500 justify-center text-center' : 'bg-zinc-950 justify-start'}`}>
+    <div className={`min-h-screen flex flex-col p-6 transition-all duration-700 ${getBgColor()} ${gameState !== 'playing' ? 'justify-center text-center' : 'justify-start'}`}>
       
-      {gameState === 'waiting' && (
+      {/* ESPERANDO TURNO (Se estende para quando você não pode agir no bônus) */}
+      {(gameState === 'waiting' || (gameState === 'bonus_ask' && !isMyTurn) || (gameState === 'bonus_vote' && isMyTurn)) && (
         <div className="flex-1 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
-          <div className="w-16 h-16 border-4 border-zinc-800 border-t-green-500 rounded-full animate-spin mx-auto mb-6"></div>
-          <p className="text-zinc-400 font-bold uppercase tracking-widest text-sm">Aguarde sua vez...</p>
+          <div className="w-16 h-16 border-4 border-zinc-800 border-t-white rounded-full animate-spin mx-auto mb-6 opacity-50"></div>
+          <p className="text-white/60 font-bold uppercase tracking-widest text-sm">Aguarde...</p>
           <div className="mt-8 flex justify-center gap-1">
              {[...Array(tokens)].map((_, i) => <div key={i} className="w-3 h-3 bg-amber-400 rounded-full" />)}
           </div>
         </div>
       )}
 
+      {/* MINHA VEZ */}
       {gameState === 'playing' && isMyTurn && (
         <div className="w-full max-w-md mx-auto animate-in slide-in-from-bottom duration-500 pb-20 mt-4">
           <p className="text-zinc-500 font-black text-xs uppercase tracking-widest mb-6 text-center">Encaixe a Música</p>
@@ -161,7 +195,6 @@ const sinalizarPronto = () => {
                   <div className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-lg leading-none">+</div>
                 </button>
 
-                {/* AQUI ESTÁ O SEU OUTLINE (Borda Amarela na Carta Inicial) */}
                 <div className={`bg-zinc-800 rounded-2xl p-3 flex items-center gap-4 shadow-xl border transition-colors ${track.isInitial ? 'border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.3)]' : 'border-zinc-700'}`}>
                   <div className="bg-white text-black font-black px-3 py-1.5 rounded-xl text-xl shadow-inner">{track.year}</div>
                   <img src={track.imageUrl} alt={track.name} className="w-16 h-16 rounded-xl object-cover shadow-md" />
@@ -190,6 +223,7 @@ const sinalizarPronto = () => {
         </div>
       )}
 
+      {/* TELA DE DESAFIO (ROUBO) */}
       {gameState === 'challenge' && (
         <div className="w-full max-w-sm mx-auto flex flex-col items-center">
           <div className="mb-12">
@@ -215,6 +249,35 @@ const sinalizarPronto = () => {
         </div>
       )}
 
+      {/* TELA DE BÔNUS: PERGUNTA PARA O JOGADOR DA VEZ */}
+      {gameState === 'bonus_ask' && isMyTurn && (
+        <div className="w-full max-w-sm mx-auto flex flex-col items-center animate-in zoom-in duration-300">
+          <div className="mb-12">
+            <p className="text-white font-black uppercase tracking-tighter text-3xl mb-4 leading-none">VOCÊ SABE O NOME DA MÚSICA E O CANTOR?</p>
+            <p className="text-white/80 font-bold text-sm">Responda para tentar ganhar uma ficha extra!</p>
+          </div>
+          <div className="flex gap-4 w-full">
+            <button onClick={() => responderBonus(false)} className="flex-1 py-10 rounded-3xl bg-black/40 text-white font-black text-2xl active:scale-95 transition-all">NÃO</button>
+            <button onClick={() => responderBonus(true)} className="flex-1 py-10 rounded-3xl bg-white text-blue-600 shadow-2xl font-black text-2xl active:scale-95 transition-all">SIM</button>
+          </div>
+        </div>
+      )}
+
+      {/* TELA DE BÔNUS: VOTAÇÃO DA PLATEIA */}
+      {gameState === 'bonus_vote' && !isMyTurn && (
+        <div className="w-full max-w-sm mx-auto flex flex-col items-center animate-in zoom-in duration-300">
+          <div className="mb-12">
+            <p className="text-white font-black uppercase tracking-tighter text-3xl mb-4 leading-none">{bonusPlayerName} ACERTOU O NOME?</p>
+            <p className="text-white/80 font-bold text-sm">Vote para decidir se ele ganha a ficha!</p>
+          </div>
+          <div className="flex gap-4 w-full">
+            <button onClick={() => votarBonus(false)} className="flex-1 py-12 rounded-3xl bg-red-500 text-white font-black text-5xl active:scale-95 transition-all shadow-xl">❌</button>
+            <button onClick={() => votarBonus(true)} className="flex-1 py-12 rounded-3xl bg-green-500 text-white font-black text-5xl active:scale-95 transition-all shadow-xl">✅</button>
+          </div>
+        </div>
+      )}
+
+      {/* OLHE PARA A TV */}
       {gameState === 'result' && (
         <div className="flex-1 flex items-center justify-center animate-bounce">
             <h2 className="text-5xl font-black text-white uppercase tracking-tighter italic">Olhe para a TV!</h2>
