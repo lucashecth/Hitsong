@@ -200,23 +200,26 @@ export default function TVPage() {
       if (challengerName && !playerAcertou) {
         const cIdx = jogadoresAtualizados.findIndex(p => p.name === challengerName);
         jogadoresAtualizados[cIdx] = { ...jogadoresAtualizados[cIdx], timeline: [...jogadoresAtualizados[cIdx].timeline] };
-        
         const correctPos = getCorrectIndex(jogadoresAtualizados[cIdx].timeline, targetYear);
         jogadoresAtualizados[cIdx].timeline.splice(correctPos, 0, targetCard!);
         jogadoresAtualizados[cIdx].score += 1;
       } else if (playerAcertou) {
         jogadoresAtualizados[playerIndex] = { ...jogadoresAtualizados[playerIndex], timeline: [...jogadoresAtualizados[playerIndex].timeline] };
-        
         jogadoresAtualizados[playerIndex].timeline.splice(slotIndex, 0, targetCard!);
         jogadoresAtualizados[playerIndex].score += 1;
       }
 
       setPlayers(jogadoresAtualizados);
-      checkWinCondition(jogadoresAtualizados);
-
-      if (stateRef.current.gameState !== 'winner') {
+      
+      // CIRURGIA 1: A música da vitória continua tocando!
+      const vencedorEncontrado = jogadoresAtualizados.find(p => p.score >= 10);
+      if (vencedorEncontrado) {
+        setWinner(vencedorEncontrado);
+        setGameState('winner');
+        // Não chamamos iniciarTurno e nem pausamos a música. O som rola no pódio!
+      } else {
         const next = (playerIndex + 1) % players.length;
-        iniciarTurno(next); // Puxa turno limpo
+        iniciarTurno(next);
       }
     }, 6000);
   };
@@ -275,14 +278,16 @@ export default function TVPage() {
   };
 
   // --- SOLUÇÃO SPOTIFY: BACKLOG E PULO AUTOMÁTICO ---
-  const lidarComMusicaQuebrada = (trackId: string) => {
-      console.warn("Música falhou e foi para o backlog:", trackId);
-      setBrokenTracks(prev => [...prev, trackId]);
-      
-      // Puxa um novo turno para a mesma pessoa instantaneamente
-      setChallengeResultText("MÚSICA INDISPONÍVEL. TROCANDO...");
-      setActionState('revealed'); 
-      setTimeout(() => iniciarTurno(stateRef.current.currentPlayerIndex), 2000);
+  const lidarComMusicaQuebrada = async (trackId: string) => {
+    console.warn("Música falhou e foi para o backlog:", trackId);
+    setBrokenTracks(prev => [...prev, trackId]);
+    setChallengeResultText("MÚSICA INDISPONÍVEL. TROCANDO...");
+    setActionState('revealed'); 
+    
+    // CIRURGIA 2: Tenta salvar no Supabase que a música quebrou!
+    try { await supabase.from('tracks').update({ is_broken: true }).eq('id', trackId); } catch(e) {}
+
+    setTimeout(() => iniciarTurno(stateRef.current.currentPlayerIndex), 3000);
   };
 
   const tocarMusica = async (trackId: string, retryCount = 0) => {
@@ -303,6 +308,13 @@ export default function TVPage() {
         method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 40000 })
       });
+
+      // CIRURGIA 3: Impede o jogo de travar se o Spotify deslogar no meio da partida
+      if (res.status === 401 || res.status === 403) {
+          setChallengeResultText("SPOTIFY DESCONECTADO. RECARREGUE A TV!");
+          setActionState('revealed');
+          return;
+      }
 
       if (!res.ok) {
           if (retryCount < 2) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
