@@ -19,7 +19,9 @@ export default function TVPage() {
   const [roomCode, setRoomCode] = useState<string>('');
   const [gameStarted, setGameStarted] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
+  
   const [usedTrackIds, setUsedTrackIds] = useState<Set<string>>(new Set());
+  const [brokenTracks, setBrokenTracks] = useState<string[]>([]); // O BACKLOG DE MÚSICAS QUEBRADAS
 
   const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'winner'>('lobby');
   const [winner, setWinner] = useState<Player | null>(null);
@@ -33,15 +35,15 @@ export default function TVPage() {
   const [mobileAction, setMobileAction] = useState<number | null>(null); 
   const [actionState, setActionState] = useState<'waiting' | 'slotted' | 'revealed'>('waiting');
   const [revealSuccess, setRevealSuccess] = useState<boolean | null>(null);
+  const [challengeResultText, setChallengeResultText] = useState<string>(''); // TEXTO CLARO DO DESAFIO
 
-  // --- O COFRE DE REFERÊNCIAS VIVAS (MATA OS BUGS DE CONEXÃO E DUPLICAÇÃO) ---
+  // O COFRE DE REFERÊNCIAS VIVAS
   const channelRef = useRef<any>(null);
-  const resolvingRef = useRef(false); // Trava anti-duplicação de jogada
-  const stateRef = useRef({ players, currentPlayerIndex, targetCard, gameStarted, gameState, pendingMove });
+  const resolvingRef = useRef(false); 
+  const stateRef = useRef({ players, currentPlayerIndex, targetCard, gameStarted, gameState, pendingMove, deck, usedTrackIds });
   
-  // Mantém o cofre sempre com a última versão dos dados a cada segundo sem reiniciar funções
   useEffect(() => {
-    stateRef.current = { players, currentPlayerIndex, targetCard, gameStarted, gameState, pendingMove };
+    stateRef.current = { players, currentPlayerIndex, targetCard, gameStarted, gameState, pendingMove, deck, usedTrackIds };
   });
   
   useEffect(() => { setIsMounted(true); }, []);
@@ -91,7 +93,6 @@ export default function TVPage() {
     }
   }, [mobileAction]);
 
-  // --- A ANTENA BLINDADA (NUNCA DESLIGA) ---
   useEffect(() => {
     if (!roomCode) return;
     const channel = supabase.channel(`room_${roomCode}`)
@@ -113,7 +114,7 @@ export default function TVPage() {
         setPendingMove({ slotIndex: payload.slotIndex, playerIndex: currentPlayerIndex });
         setGameState('challenge');
         setChallengeTimer(5);
-        pausarMusica();
+        // NOTA: pausarMusica() removido daqui para a música continuar tocando no desafio
         channel.send({
           type: 'broadcast', event: 'open-challenge',
           payload: { timer: 5, playersTokens: players.map(p => ({ name: p.name, tokens: p.tokens })) }
@@ -139,13 +140,13 @@ export default function TVPage() {
     channel.subscribe();
     channelRef.current = channel;
     return () => { supabase.removeChannel(channel); };
-  }, [roomCode]); // <- Sem dependências soltas. A antena nunca vai ignorar um reconnect agora.
+  }, [roomCode]); 
 
   const resolverJogadaReal = (slotIndex: number, playerIndex: number, challengerName: string | null) => {
-    if (resolvingRef.current) return; // TRAVA DE SEGURANÇA 1: Impede duplicação de cliques
+    if (resolvingRef.current) return; 
     resolvingRef.current = true;
 
-    const { players, targetCard } = stateRef.current; // Puxa dados do cofre
+    const { players, targetCard } = stateRef.current; 
     const activePlayer = players[playerIndex];
     const targetYear = parseInt(targetCard!.year);
     
@@ -155,15 +156,30 @@ export default function TVPage() {
 
     let novosJogadores = [...players];
     let acertouDeFato = false;
+    let msgFeedback = "";
 
+    // LÓGICA DE TEXTO DO DESAFIO CLARA PARA A TV
     if (challengerName) {
       const challengerIndex = novosJogadores.findIndex(p => p.name === challengerName);
       novosJogadores[challengerIndex].tokens -= 1;
-      if (!playerAcertou) acertouDeFato = true; 
+      if (!playerAcertou) {
+        acertouDeFato = true; 
+        msgFeedback = `${challengerName} ROUBOU A CARTA!`;
+      } else {
+        msgFeedback = `DESAFIO DE ${challengerName} FALHOU!`;
+      }
     } else {
-      if (playerAcertou) acertouDeFato = true;
+      if (playerAcertou) {
+        acertouDeFato = true;
+        msgFeedback = "ACERTOU!";
+      } else {
+        msgFeedback = "ERROU!";
+      }
     }
 
+    setChallengeResultText(msgFeedback);
+
+    // Só pausa a música se de fato ninguém levou a carta
     if (!playerAcertou && !challengerName) {
         pausarMusica();
         tocarSomErro();
@@ -181,7 +197,6 @@ export default function TVPage() {
     setTimeout(() => {
       let jogadoresAtualizados = [...novosJogadores];
       
-      // TRAVA DE SEGURANÇA 2: Cópia profunda da timeline para o React não renderizar clones visuais
       if (challengerName && !playerAcertou) {
         const cIdx = jogadoresAtualizados.findIndex(p => p.name === challengerName);
         jogadoresAtualizados[cIdx] = { ...jogadoresAtualizados[cIdx], timeline: [...jogadoresAtualizados[cIdx].timeline] };
@@ -201,7 +216,7 @@ export default function TVPage() {
 
       if (stateRef.current.gameState !== 'winner') {
         const next = (playerIndex + 1) % players.length;
-        iniciarTurno(next, jogadoresAtualizados, deck);
+        iniciarTurno(next); // Puxa turno limpo
       }
     }, 6000);
   };
@@ -215,37 +230,61 @@ export default function TVPage() {
 
   const iniciarPartidaGlobal = () => {
     const currentDeck = [...deck];
-    const initialPlayers = players.map(p => ({ ...p, timeline: [{ ...currentDeck.pop()!, isInitial: true }], tokens: 1 }));
+    const newUsed = new Set<string>(); // Correção do Bug 2: Memoriza as primeiras cartas
+    
+    const initialPlayers = players.map(p => {
+        const initialTrack = currentDeck.pop()!;
+        newUsed.add(initialTrack.id);
+        return { ...p, timeline: [{ ...initialTrack, isInitial: true }], tokens: 1 };
+    });
+    
+    setUsedTrackIds(newUsed);
     setPlayers(initialPlayers);
     setDeck(currentDeck);
     setGameStarted(true);
     setGameState('playing');
-    iniciarTurno(0, initialPlayers, currentDeck);
+    
+    // Pequeno delay para garantir que o React atualizou os estados
+    setTimeout(() => iniciarTurno(0), 500); 
   };
 
-  const iniciarTurno = (playerIndex: number, currentPlayers: Player[], currentDeck: Track[]) => {
-    resolvingRef.current = false; // DESTRAVA PARA O PRÓXIMO TURNO
+  const iniciarTurno = (playerIndex: number = stateRef.current.currentPlayerIndex) => {
+    resolvingRef.current = false; 
     setActionState('waiting');
     setRevealSuccess(null);
     setMobileAction(null);
+    setChallengeResultText(''); // Limpa texto do feedback
 
-    const availableTracks = currentDeck.filter(t => !usedTrackIds.has(t.id));
+    // Puxa do cofre atualizado
+    const { deck, usedTrackIds, players } = stateRef.current; 
+
+    const availableTracks = deck.filter(t => !usedTrackIds.has(t.id));
     if (availableTracks.length < 1) return alert("Acervo esgotado!");
     
     const target = availableTracks.pop()!;
     setUsedTrackIds(prev => new Set(prev).add(target.id)); 
-    setDeck(currentDeck.filter(t => t.id !== target.id));
+    setDeck(deck.filter(t => t.id !== target.id));
     setCurrentPlayerIndex(playerIndex);
     setTargetCard(target);
     tocarMusica(target.id);
     
     channelRef.current?.send({
       type: 'broadcast', event: 'game-state',
-      payload: { currentPlayer: currentPlayers[playerIndex].name, playerTimeline: currentPlayers[playerIndex].timeline, targetCard: target }
+      payload: { currentPlayer: players[playerIndex].name, playerTimeline: players[playerIndex].timeline, targetCard: target }
     });
   };
 
-  // --- ANTIFALHAS DO SPOTIFY (TENTA 3 VEZES SE DER ERRO) ---
+  // --- SOLUÇÃO SPOTIFY: BACKLOG E PULO AUTOMÁTICO ---
+  const lidarComMusicaQuebrada = (trackId: string) => {
+      console.warn("Música falhou e foi para o backlog:", trackId);
+      setBrokenTracks(prev => [...prev, trackId]);
+      
+      // Puxa um novo turno para a mesma pessoa instantaneamente
+      setChallengeResultText("MÚSICA INDISPONÍVEL. TROCANDO...");
+      setActionState('revealed'); 
+      setTimeout(() => iniciarTurno(stateRef.current.currentPlayerIndex), 2000);
+  };
+
   const tocarMusica = async (trackId: string, retryCount = 0) => {
     const token = (session as any)?.accessToken;
     if (!token) return;
@@ -255,7 +294,8 @@ export default function TVPage() {
       const targetDevice = devicesData.devices?.find((d: any) => d.is_active) || devicesData.devices?.[0];
       
       if (!targetDevice) {
-         if (retryCount < 3) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+         if (retryCount < 2) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+         else lidarComMusicaQuebrada(trackId);
          return;
       }
 
@@ -264,9 +304,13 @@ export default function TVPage() {
         body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 40000 })
       });
 
-      if (!res.ok && retryCount < 3) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+      if (!res.ok) {
+          if (retryCount < 2) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+          else lidarComMusicaQuebrada(trackId);
+      }
     } catch (e) {
-      if (retryCount < 3) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+        if (retryCount < 2) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+        else lidarComMusicaQuebrada(trackId);
     }
   };
 
@@ -347,6 +391,7 @@ export default function TVPage() {
           <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{session?.user?.name || 'Spotify'}</span>
         </div>
         <div className="flex items-center gap-6">
+          {brokenTracks.length > 0 && <span className="text-[10px] text-red-500 font-bold border border-red-500/20 px-2 py-1 rounded">Backlog: {brokenTracks.length}</span>}
           <button onClick={irParaEdicao} className="text-[10px] bg-zinc-800 px-3 py-1 rounded hover:bg-zinc-700">EDITAR ACERVO</button>
           {roomCode && <span className="text-sm font-black text-white bg-zinc-800 px-4 py-1.5 rounded-full border border-zinc-700">SALA: {roomCode}</span>}
           <a href="https://hitsong.vercel.app/api/auth/callback/spotify" className="text-[10px] font-bold text-green-500 border border-green-500/20 px-3 py-1 rounded-md">RECONECTAR SPOTIFY</a>
@@ -392,7 +437,7 @@ export default function TVPage() {
           <div className="flex-1 flex flex-col relative">
             <div className={`w-full py-8 text-center z-20 transition-colors duration-500 ${gameState === 'challenge' ? 'bg-amber-500 text-black' : actionState === 'revealed' ? (revealSuccess ? 'bg-green-600' : 'bg-red-600') : 'bg-transparent'}`}>
               <h1 className="text-5xl font-black uppercase tracking-tighter">
-                {gameState === 'challenge' ? `DISCORDAR? (${challengeTimer}s)` : actionState === 'revealed' ? (revealSuccess ? 'ACERTOU!' : 'ERROU!') : `Vez de: ${players[currentPlayerIndex]?.name}`}
+                {gameState === 'challenge' ? `DISCORDAR? (${challengeTimer}s)` : actionState === 'revealed' ? challengeResultText : `Vez de: ${players[currentPlayerIndex]?.name}`}
               </h1>
             </div>
 
