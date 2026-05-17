@@ -319,22 +319,20 @@ export default function TVPage() {
     setTimeout(() => iniciarTurno(stateRef.current.currentPlayerIndex), 3000);
   };
 
-  const tocarMusica = async (trackId: string, retryCount = 0) => {
-    // 1. Atualiza a sessão silenciosamente caso você tenha reconectado na outra aba
+ const tocarMusica = async (trackId: string, retryCount = 0) => {
     if (retryCount > 0 && update) await update();
-    
     const token = (session as any)?.accessToken;
     if (!token) return;
 
     if (spotifyCheckRef.current) clearTimeout(spotifyCheckRef.current);
 
     try {
+      // LINK OFICIAL 1: DISPOSITIVOS ATIVOS
       const devicesRes = await fetch('https://api.spotify.com/v1/me/player/devices', { headers: { 'Authorization': `Bearer ${token}` } });
       
       if (devicesRes.status === 401) {
           setStatusText("TOKEN EXPIROU! CLIQUE EM RECONECTAR LÁ EM CIMA");
           setActionState('revealed');
-          // Fica em loop a cada 5s esperando você reconectar sem perder o jogo
           setTimeout(() => tocarMusica(trackId, retryCount + 1), 5000);
           return;
       }
@@ -350,6 +348,7 @@ export default function TVPage() {
          return;
       }
 
+      // LINK OFICIAL 2: DAR O PLAY
       const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
         method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 35000 })
@@ -374,7 +373,6 @@ export default function TVPage() {
           return lidarComMusicaQuebrada(trackId);
       }
 
-      // 2. Ressurreição: Se a música tocou e a tela de erro tava lá, limpa a tela e volta pro CD!
       if (statusText.includes("SPOTIFY") || statusText.includes("TOKEN")) {
           setStatusText("");
           setActionState('waiting');
@@ -382,6 +380,7 @@ export default function TVPage() {
 
       spotifyCheckRef.current = setTimeout(async () => {
         try {
+            // LINK OFICIAL 3: CHECAR O SILÊNCIO
             const check = await fetch('https://api.spotify.com/v1/me/player/currently-playing', { headers: { 'Authorization': `Bearer ${token}` } });
             const data = await check.json();
             if (!data || !data.is_playing || !data.item || data.item.id !== trackId) {
@@ -399,9 +398,10 @@ export default function TVPage() {
   const pausarMusica = async () => {
     const token = (session as any)?.accessToken;
     if (!token) return;
+    // LINK OFICIAL 4: PAUSE
     await fetch('https://api.spotify.com/v1/me/player/pause', { method: 'PUT', headers: { 'Authorization': `Bearer ${token}` } });
   };
-
+  
   const tocarSomErro = () => {
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
