@@ -14,7 +14,7 @@ const CompactDisc = ({ large = false }) => (
 );
 
 export default function TVPage() {
-  const { data: session } = useSession();
+  const { data: session, update } = useSession();
   const [players, setPlayers] = useState<Player[]>([]);
   const [roomCode, setRoomCode] = useState<string>('');
   const [gameStarted, setGameStarted] = useState(false);
@@ -320,6 +320,9 @@ export default function TVPage() {
   };
 
   const tocarMusica = async (trackId: string, retryCount = 0) => {
+    // 1. Atualiza a sessão silenciosamente caso você tenha reconectado na outra aba
+    if (retryCount > 0 && update) await update();
+    
     const token = (session as any)?.accessToken;
     if (!token) return;
 
@@ -327,11 +330,22 @@ export default function TVPage() {
 
     try {
       const devicesRes = await fetch('https://api.spotify.com/v1/me/player/devices', { headers: { 'Authorization': `Bearer ${token}` } });
+      
+      if (devicesRes.status === 401) {
+          setStatusText("TOKEN EXPIROU! CLIQUE EM RECONECTAR LÁ EM CIMA");
+          setActionState('revealed');
+          // Fica em loop a cada 5s esperando você reconectar sem perder o jogo
+          setTimeout(() => tocarMusica(trackId, retryCount + 1), 5000);
+          return;
+      }
+
       const devicesData = await devicesRes.json();
       const targetDevice = devicesData.devices?.find((d: any) => d.is_active) || devicesData.devices?.[0];
       
       if (!targetDevice) {
-         if (retryCount < 2) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+         setStatusText("CADÊ O SPOTIFY? ABRA O APP NO CELULAR/PC!");
+         setActionState('revealed');
+         if (retryCount < 6) setTimeout(() => tocarMusica(trackId, retryCount + 1), 5000);
          else lidarComMusicaQuebrada(trackId);
          return;
       }
@@ -341,9 +355,17 @@ export default function TVPage() {
         body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 35000 })
       });
 
-      if (res.status === 401 || res.status === 403) {
-          setStatusText("SPOTIFY DESCONECTADO. RECARREGUE A TV!");
+      if (res.status === 401) {
+          setStatusText("TOKEN EXPIROU! CLIQUE EM RECONECTAR LÁ EM CIMA");
           setActionState('revealed');
+          setTimeout(() => tocarMusica(trackId, retryCount + 1), 5000);
+          return;
+      }
+
+      if (res.status === 403) {
+          setStatusText("SPOTIFY TRAVOU! DÊ UM PLAY E PAUSE NO CELULAR");
+          setActionState('revealed');
+          setTimeout(() => tocarMusica(trackId, retryCount + 1), 5000);
           return;
       }
 
@@ -352,9 +374,15 @@ export default function TVPage() {
           return lidarComMusicaQuebrada(trackId);
       }
 
+      // 2. Ressurreição: Se a música tocou e a tela de erro tava lá, limpa a tela e volta pro CD!
+      if (statusText.includes("SPOTIFY") || statusText.includes("TOKEN")) {
+          setStatusText("");
+          setActionState('waiting');
+      }
+
       spotifyCheckRef.current = setTimeout(async () => {
         try {
-            const check = await fetch('https://www.google.com/search?q=https://api.spotify.com/v1/playlists/%24', { headers: { 'Authorization': `Bearer ${token}` } });
+            const check = await fetch('https://api.spotify.com/v1/me/player/currently-playing', { headers: { 'Authorization': `Bearer ${token}` } });
             const data = await check.json();
             if (!data || !data.is_playing || !data.item || data.item.id !== trackId) {
                 lidarComMusicaQuebrada(trackId);
@@ -447,7 +475,7 @@ export default function TVPage() {
           {brokenTracks.length > 0 && <span className="text-[10px] text-red-500 font-bold border border-red-500/20 px-2 py-1 rounded">Backlog: {brokenTracks.length}</span>}
           <button onClick={irParaEdicao} className="text-[10px] bg-zinc-800 px-3 py-1 rounded hover:bg-zinc-700">EDITAR ACERVO</button>
           {roomCode && <span className="text-sm font-black text-white bg-zinc-800 px-4 py-1.5 rounded-full border border-zinc-700">SALA: {roomCode}</span>}
-          <a href="https://hitsong.vercel.app/api/auth/callback/spotify" className="text-[10px] font-bold text-green-500 border border-green-500/20 px-3 py-1 rounded-md">RECONECTAR SPOTIFY</a>
+          <a href="/api/auth/signin/spotify" target="_blank" rel="noopener noreferrer" className="text-[10px] font-bold text-green-500 border border-green-500/20 px-3 py-1 rounded-md">RECONECTAR SPOTIFY</a>
           <button onClick={() => signOut({ callbackUrl: '/tv' })} className="text-[10px] font-bold text-zinc-500">SAIR</button>
         </div>
       </div>
