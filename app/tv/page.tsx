@@ -23,12 +23,14 @@ export default function TVPage() {
   const [usedTrackIds, setUsedTrackIds] = useState<Set<string>>(new Set());
   const [brokenTracks, setBrokenTracks] = useState<string[]>([]); 
 
-  // Removido o 'bonus_ask'. Direto pro 'bonus_speak'.
   const [gameState, setGameState] = useState<'lobby' | 'playing' | 'challenge' | 'bonus_speak' | 'bonus_vote' | 'winner'>('lobby');
   const [winner, setWinner] = useState<Player | null>(null);
   const [challengeTimer, setChallengeTimer] = useState(0); 
   const [pendingMove, setPendingMove] = useState<{ slotIndex: number, playerIndex: number } | null>(null);
   const [votes, setVotes] = useState<{ name: string, vote: boolean }[]>([]);
+
+  // NOVO: Estado para travar a tela em caso de erro no Spotify
+  const [spotifyError, setSpotifyError] = useState<string | null>(null);
 
   const [deck, setDeck] = useState<Track[]>([]);
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
@@ -62,8 +64,10 @@ export default function TVPage() {
     return index;
   };
 
-  // TIMERS DINÂMICOS
   useEffect(() => {
+    // Se a tela de erro estiver ativa, pausa todos os cronômetros do jogo
+    if (spotifyError) return;
+
     if (challengeTimer > 0) {
       const timer = setTimeout(() => setChallengeTimer(prev => prev - 1), 1000);
       return () => clearTimeout(timer);
@@ -72,7 +76,6 @@ export default function TVPage() {
         const { pendingMove } = stateRef.current;
         if (pendingMove) resolverJogadaReal(pendingMove.slotIndex, pendingMove.playerIndex, null);
       } else if (gameState === 'bonus_speak') {
-        // Acabou os 10s de falar. Revela e abre 5s de votação!
         setGameState('bonus_vote');
         setChallengeTimer(5); 
         setVotes([]);
@@ -83,7 +86,7 @@ export default function TVPage() {
         processarVotosBonus();
       }
     }
-  }, [challengeTimer, gameState]);
+  }, [challengeTimer, gameState, spotifyError]);
 
   useEffect(() => {
     if (mobileAction !== null) {
@@ -154,12 +157,10 @@ export default function TVPage() {
     if (slotIndex > 0 && parseInt(activePlayer.timeline[slotIndex - 1].year) > targetYear) playerAcertou = false;
     if (slotIndex < activePlayer.timeline.length && parseInt(activePlayer.timeline[slotIndex].year) < targetYear) playerAcertou = false;
 
-    // SE ACERTOU E NINGUÉM ROUBOU, VAI DIRETO PRO BÔNUS!
     if (playerAcertou && !challengerName) {
       resolvingRef.current = false; 
       setGameState('bonus_speak');
-      setChallengeTimer(10); // 10 segundos pra falar
-      // Força os celulares irem para a tela "Olhe para a TV" enquanto o cara fala
+      setChallengeTimer(10); 
       channelRef.current?.send({ type: 'broadcast', event: 'play-result', payload: { success: true, actualYear: targetCard?.year } });
       return;
     }
@@ -182,7 +183,7 @@ export default function TVPage() {
     }
 
     setPlayers(novosJogadores);
-    setGameState('playing'); // Corrige o bug da barra presa!
+    setGameState('playing'); 
 
     setTimeout(() => {
       let updated = [...stateRef.current.players];
@@ -223,7 +224,7 @@ export default function TVPage() {
     
     setRevealSuccess(finalSuccess);
     setActionState('revealed');
-    setGameState('playing'); // Corrige o bug da barra presa!
+    setGameState('playing'); 
 
     channelRef.current?.send({ type: 'broadcast', event: 'play-result', payload: { success: finalSuccess, actualYear: targetCard?.year } });
 
@@ -319,21 +320,17 @@ export default function TVPage() {
     setTimeout(() => iniciarTurno(stateRef.current.currentPlayerIndex), 3000);
   };
 
- const tocarMusica = async (trackId: string, retryCount = 0) => {
-    if (retryCount > 0 && update) await update();
+  const tocarMusica = async (trackId: string, retryCount = 0) => {
     const token = (session as any)?.accessToken;
     if (!token) return;
 
     if (spotifyCheckRef.current) clearTimeout(spotifyCheckRef.current);
 
     try {
-      // LINK OFICIAL 1: DISPOSITIVOS ATIVOS
       const devicesRes = await fetch('https://api.spotify.com/v1/me/player/devices', { headers: { 'Authorization': `Bearer ${token}` } });
       
-      if (devicesRes.status === 401) {
-          setStatusText("TOKEN EXPIROU! CLIQUE EM RECONECTAR LÁ EM CIMA");
-          setActionState('revealed');
-          setTimeout(() => tocarMusica(trackId, retryCount + 1), 5000);
+      if (devicesRes.status === 401 || devicesRes.status === 403) {
+          setSpotifyError("O TOKEN DO SPOTIFY EXPIROU! 1. Clique em 'Reconectar' ali em cima. 2. Depois clique aqui embaixo.");
           return;
       }
 
@@ -341,30 +338,18 @@ export default function TVPage() {
       const targetDevice = devicesData.devices?.find((d: any) => d.is_active) || devicesData.devices?.[0];
       
       if (!targetDevice) {
-         setStatusText("CADÊ O SPOTIFY? ABRA O APP NO CELULAR/PC!");
-         setActionState('revealed');
-         if (retryCount < 6) setTimeout(() => tocarMusica(trackId, retryCount + 1), 5000);
-         else lidarComMusicaQuebrada(trackId);
+         if (retryCount < 2) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
+         else setSpotifyError("NENHUM DISPOSITIVO ATIVO! Abra o Spotify no celular/PC e dê um play.");
          return;
       }
 
-      // LINK OFICIAL 2: DAR O PLAY
       const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${targetDevice.id}`, {
         method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: 35000 })
       });
 
-      if (res.status === 401) {
-          setStatusText("TOKEN EXPIROU! CLIQUE EM RECONECTAR LÁ EM CIMA");
-          setActionState('revealed');
-          setTimeout(() => tocarMusica(trackId, retryCount + 1), 5000);
-          return;
-      }
-
-      if (res.status === 403) {
-          setStatusText("SPOTIFY TRAVOU! DÊ UM PLAY E PAUSE NO CELULAR");
-          setActionState('revealed');
-          setTimeout(() => tocarMusica(trackId, retryCount + 1), 5000);
+      if (res.status === 401 || res.status === 403) {
+          setSpotifyError("O SPOTIFY DESCONECTOU! 1. Clique em 'Reconectar' ali em cima. 2. Volte aqui.");
           return;
       }
 
@@ -373,14 +358,8 @@ export default function TVPage() {
           return lidarComMusicaQuebrada(trackId);
       }
 
-      if (statusText.includes("SPOTIFY") || statusText.includes("TOKEN")) {
-          setStatusText("");
-          setActionState('waiting');
-      }
-
       spotifyCheckRef.current = setTimeout(async () => {
         try {
-            // LINK OFICIAL 3: CHECAR O SILÊNCIO
             const check = await fetch('https://api.spotify.com/v1/me/player/currently-playing', { headers: { 'Authorization': `Bearer ${token}` } });
             const data = await check.json();
             if (!data || !data.is_playing || !data.item || data.item.id !== trackId) {
@@ -398,10 +377,9 @@ export default function TVPage() {
   const pausarMusica = async () => {
     const token = (session as any)?.accessToken;
     if (!token) return;
-    // LINK OFICIAL 4: PAUSE
     await fetch('https://api.spotify.com/v1/me/player/pause', { method: 'PUT', headers: { 'Authorization': `Bearer ${token}` } });
   };
-  
+
   const tocarSomErro = () => {
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -452,6 +430,28 @@ export default function TVPage() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-zinc-950 text-white font-sans overflow-hidden relative">
+      
+      {/* TELA DE RESSURREIÇÃO DO SPOTIFY */}
+      {spotifyError && (
+        <div className="fixed inset-0 z-[200] bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center p-10 text-center">
+          <div className="w-24 h-24 mb-8 bg-red-600 rounded-full flex items-center justify-center animate-pulse">
+              <span className="text-5xl">⚠️</span>
+          </div>
+          <h2 className="text-4xl text-white font-black mb-12 max-w-4xl leading-tight">{spotifyError}</h2>
+          <button
+              onClick={async () => {
+                  setSpotifyError("VERIFICANDO...");
+                  if (update) await update();
+                  setSpotifyError(null);
+                  if (targetCard) tocarMusica(targetCard.id, 0);
+              }}
+              className="bg-green-500 text-black px-12 py-6 rounded-full font-black text-2xl hover:scale-105 transition-transform shadow-[0_0_50px_rgba(34,197,94,0.4)]"
+          >
+              JÁ RECONECTEI - RETOMAR PARTIDA
+          </button>
+        </div>
+      )}
+
       <div className="absolute inset-0 opacity-20 pointer-events-none z-0">
         <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-purple-600 blur-[120px] animate-pulse"></div>
         <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-blue-600 blur-[120px] animate-pulse" style={{ animationDelay: '2s' }}></div>
@@ -466,6 +466,7 @@ export default function TVPage() {
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
 
+      {/* HEADER */}
       <div className="w-full bg-zinc-900/40 backdrop-blur-md px-8 py-4 flex justify-between items-center border-b border-zinc-800/50 z-50 flex-shrink-0">
         <div className="flex items-center gap-4">
           <div className="w-2 h-2 bg-green-500 rounded-full animate-ping"></div>
@@ -488,7 +489,6 @@ export default function TVPage() {
             <div className="w-full max-w-4xl flex flex-col items-center relative h-full justify-start pt-10">
               <h1 className="text-[10rem] leading-none font-black text-white mb-8 animate-pulse">{roomCode}</h1>
               
-              {/* GRID COM SCROLL PARA NÃO QUEBRAR A TELA */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4 w-full max-h-[45vh] overflow-y-auto no-scrollbar pb-32">
                 {players.map((p) => (
                   <div key={p.name} className={`p-4 rounded-2xl border-2 transition-all ${p.isReady ? 'border-green-500 bg-green-500/10' : 'border-zinc-800 bg-zinc-900/50'}`}>
@@ -497,7 +497,6 @@ export default function TVPage() {
                 ))}
               </div>
 
-              {/* BOTÃO FLUTUANTE QUE NUNCA SOME */}
               {players.length > 0 && players.every(p => p.isReady) && (
                   <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-50">
                     <button 
