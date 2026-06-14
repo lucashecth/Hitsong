@@ -330,7 +330,7 @@ export default function TVPage() {
       const devicesRes = await fetch('https://api.spotify.com/v1/me/player/devices', { headers: { 'Authorization': `Bearer ${token}` } });
       
       if (devicesRes.status === 401 || devicesRes.status === 403) {
-          setSpotifyError("O TOKEN DO SPOTIFY EXPIROU! 1. Clique em 'Reconectar' ali em cima. 2. Depois clique aqui embaixo.");
+          setSpotifyError("O TOKEN DO SPOTIFY EXPIROU!");
           return;
       }
 
@@ -349,7 +349,7 @@ export default function TVPage() {
       });
 
       if (res.status === 401 || res.status === 403) {
-          setSpotifyError("O SPOTIFY DESCONECTOU! 1. Clique em 'Reconectar' ali em cima. 2. Volte aqui.");
+          setSpotifyError("O SPOTIFY DESCONECTOU!");
           return;
       }
 
@@ -431,24 +431,38 @@ export default function TVPage() {
   return (
     <div className="flex flex-col h-screen w-screen bg-zinc-950 text-white font-sans overflow-hidden relative">
       
-      {/* TELA DE RESSURREIÇÃO DO SPOTIFY */}
+{/* TELA DE RESSURREIÇÃO DO SPOTIFY */}
       {spotifyError && (
         <div className="fixed inset-0 z-[200] bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center p-10 text-center">
           <div className="w-24 h-24 mb-8 bg-red-600 rounded-full flex items-center justify-center animate-pulse">
               <span className="text-5xl">⚠️</span>
           </div>
           <h2 className="text-4xl text-white font-black mb-12 max-w-4xl leading-tight">{spotifyError}</h2>
-          <button
-              onClick={async () => {
-                  setSpotifyError("VERIFICANDO...");
-                  if (update) await update();
-                  setSpotifyError(null);
-                  if (targetCard) tocarMusica(targetCard.id, 0);
-              }}
-              className="bg-green-500 text-black px-12 py-6 rounded-full font-black text-2xl hover:scale-105 transition-transform shadow-[0_0_50px_rgba(34,197,94,0.4)]"
-          >
-              JÁ RECONECTEI - RETOMAR PARTIDA
-          </button>
+          
+          <div className="flex flex-col gap-6 items-center">
+              {/* BOTÃO 1: Abre a aba do Spotify no meio da tela */}
+              <a 
+                  href="/api/auth/signin/spotify" 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="bg-white text-black px-12 py-4 rounded-full font-black text-xl hover:scale-105 transition-transform"
+              >
+                  PASSO 1: CLIQUE AQUI PARA RECONECTAR
+              </a>
+
+              {/* BOTÃO 2: Retoma o jogo */}
+              <button
+                  onClick={async () => {
+                      setSpotifyError("VERIFICANDO...");
+                      if (update) await update();
+                      setSpotifyError(null);
+                      if (targetCard) tocarMusica(targetCard.id, 0);
+                  }}
+                  className="bg-green-500 text-black px-12 py-6 rounded-full font-black text-2xl hover:scale-105 transition-transform shadow-[0_0_50px_rgba(34,197,94,0.4)] mt-4"
+              >
+                  PASSO 2: JÁ RECONECTEI - RETOMAR PARTIDA
+              </button>
+          </div>
         </div>
       )}
 
