@@ -14,6 +14,41 @@ const CompactDisc = ({ large = false }) => (
   </div>
 );
 
+const MusicalSpectrum = () => {
+  const barsCount = 36;
+  return (
+    <div className="absolute pointer-events-none z-0 flex items-center justify-center">
+      <div className="relative w-48 h-48 flex items-center justify-center">
+        {[...Array(barsCount)].map((_, i) => {
+          const rotation = (i * 360) / barsCount;
+          const duration = 0.5 + (i % 6) * 0.12;
+          const delay = (i % 8) * -0.15;
+          return (
+            <div
+              key={i}
+              className="absolute"
+              style={{
+                transform: `rotate(${rotation}deg) translateY(-80px)`,
+                transformOrigin: 'bottom center',
+              }}
+            >
+              <div
+                className="w-[3px] rounded-full bg-gradient-to-t from-purple-500 via-pink-500 to-cyan-400"
+                style={{
+                  height: '36px',
+                  transformOrigin: 'bottom center',
+                  animation: `pulseBar ${duration}s ease-in-out infinite alternate`,
+                  animationDelay: `${delay}s`,
+                }}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 export default function TVPage() {
   const router = useRouter();
   const { data: session, update } = useSession();
@@ -537,6 +572,10 @@ export default function TVPage() {
         .anim-flip { animation: flipIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        @keyframes pulseBar {
+          0% { transform: scaleY(0.2); opacity: 0.3; }
+          100% { transform: scaleY(1.4); opacity: 1; }
+        }
       `}</style>
 
       {/* HEADER */}
@@ -702,7 +741,12 @@ export default function TVPage() {
               </h1>
             </div>
 
-            {actionState === 'waiting' && <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-10"><CompactDisc large /></div>}
+            {actionState === 'waiting' && (
+              <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 flex items-center justify-center">
+                <MusicalSpectrum />
+                <CompactDisc large />
+              </div>
+            )}
 
             <div id="timeline-container" className="absolute bottom-0 w-full overflow-x-auto no-scrollbar pb-12 pt-40 z-10 scroll-smooth">
               <div className="flex items-end h-[24rem] w-max gap-4 mx-auto">
