@@ -41,6 +41,11 @@ export default function TVPage() {
   const [revealSuccess, setRevealSuccess] = useState<boolean | null>(null);
   const [statusText, setStatusText] = useState<string>(''); 
 
+  // Estados para o Seletor de Dispositivo do Spotify
+  const [spotifyDevices, setSpotifyDevices] = useState<any[]>([]);
+  const [activeDevice, setActiveDevice] = useState<any>(null);
+  const [isDeviceDropdownOpen, setIsDeviceDropdownOpen] = useState(false); 
+
   const channelRef = useRef<any>(null);
   const resolvingRef = useRef(false); 
   const spotifyCheckRef = useRef<NodeJS.Timeout | null>(null);
@@ -51,6 +56,58 @@ export default function TVPage() {
   });
   
   useEffect(() => { setIsMounted(true); }, []);
+
+  const buscarDispositivos = async () => {
+    const token = (session as any)?.accessToken;
+    if (!token) return;
+    try {
+      const res = await fetch('https://api.spotify.com/v1/me/player/devices', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.status === 401 || res.status === 403) {
+        return;
+      }
+      if (res.ok) {
+        const data = await res.json();
+        const devicesList = data.devices || [];
+        setSpotifyDevices(devicesList);
+        const active = devicesList.find((d: any) => d.is_active);
+        setActiveDevice(active || null);
+      }
+    } catch (err) {
+      console.error("Erro ao buscar dispositivos:", err);
+    }
+  };
+
+  const transferirReproducao = async (deviceId: string) => {
+    const token = (session as any)?.accessToken;
+    if (!token) return;
+    try {
+      const res = await fetch('https://api.spotify.com/v1/me/player', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          device_ids: [deviceId]
+        })
+      });
+      if (res.ok) {
+        setTimeout(buscarDispositivos, 500);
+      }
+    } catch (err) {
+      console.error("Erro ao transferir reprodução:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (session) {
+      buscarDispositivos();
+      const interval = setInterval(buscarDispositivos, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [session]);
 
   const irParaEdicao = () => {
     const senha = prompt("Digite a senha de editor:");
@@ -335,7 +392,9 @@ export default function TVPage() {
       }
 
       const devicesData = await devicesRes.json();
-      const targetDevice = devicesData.devices?.find((d: any) => d.is_active) || devicesData.devices?.[0];
+      const targetDevice = devicesData.devices?.find((d: any) => d.is_active) || 
+                           devicesData.devices?.find((d: any) => d.id === activeDevice?.id) || 
+                           devicesData.devices?.[0];
       
       if (!targetDevice) {
          if (retryCount < 2) setTimeout(() => tocarMusica(trackId, retryCount + 1), 1500);
@@ -484,7 +543,100 @@ export default function TVPage() {
       <div className="w-full bg-zinc-900/40 backdrop-blur-md px-8 py-4 flex justify-between items-center border-b border-zinc-800/50 z-50 flex-shrink-0">
         <div className="flex items-center gap-4">
           <div className="w-2 h-2 bg-green-500 rounded-full animate-ping"></div>
-          <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{session?.user?.name || 'Spotify'}</span>
+          <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest mr-2">{session?.user?.name || 'Spotify'}</span>
+          
+          {/* Seletor de Saída de Áudio Spotify */}
+          <div className="relative">
+            <button
+              onClick={() => {
+                setIsDeviceDropdownOpen(!isDeviceDropdownOpen);
+                buscarDispositivos();
+              }}
+              className="flex items-center gap-2 bg-zinc-850 hover:bg-zinc-800 border border-zinc-700/50 text-[10px] px-3 py-1.5 rounded-full transition-all text-zinc-300 font-semibold cursor-pointer select-none"
+            >
+              {activeDevice ? (
+                <>
+                  <span className="text-green-500">🔊</span>
+                  <span className="truncate max-w-[120px]">{activeDevice.name}</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-zinc-500">🔇</span>
+                  <span>Sem Saída Ativa</span>
+                </>
+              )}
+              <svg className={`w-3 h-3 ml-0.5 transition-transform duration-200 ${isDeviceDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {isDeviceDropdownOpen && (
+              <>
+                {/* Overlay para fechar ao clicar fora */}
+                <div className="fixed inset-0 z-40" onClick={() => setIsDeviceDropdownOpen(false)}></div>
+                
+                {/* Dropdown Menu */}
+                <div className="absolute left-0 mt-2 w-64 bg-zinc-900/95 backdrop-blur-xl border border-zinc-800 rounded-2xl shadow-2xl z-50 p-2.5 anim-drop">
+                  <div className="flex justify-between items-center px-2 pb-2 border-b border-zinc-800/60 mb-2">
+                    <span className="text-[9px] font-black text-zinc-500 uppercase tracking-wider">Saídas do Spotify</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        buscarDispositivos();
+                      }}
+                      className="text-zinc-500 hover:text-white transition-colors p-1 cursor-pointer"
+                      title="Atualizar lista"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89M9 11l3-3 3 3" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div className="max-h-48 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                    {spotifyDevices.length === 0 ? (
+                      <div className="text-zinc-500 text-[10px] px-2 py-3 italic text-center">
+                        Nenhum player ativo.<br />Abra o Spotify em algum dispositivo.
+                      </div>
+                    ) : (
+                      spotifyDevices.map((device) => {
+                        const deviceIcons: Record<string, string> = {
+                          Computer: "💻",
+                          Smartphone: "📱",
+                          Speaker: "🔊",
+                          CastAudio: "📺",
+                          Tv: "📺",
+                        };
+                        const icon = deviceIcons[device.type] || "🎧";
+                        return (
+                          <button
+                            key={device.id}
+                            onClick={() => {
+                              transferirReproducao(device.id);
+                              setIsDeviceDropdownOpen(false);
+                            }}
+                            className={`w-full text-left flex items-center justify-between px-2.5 py-2 rounded-xl text-[11px] transition-all border cursor-pointer ${
+                              device.is_active
+                                ? 'bg-green-500/10 text-green-400 font-bold border-green-500/30'
+                                : 'hover:bg-zinc-800/60 text-zinc-400 border-transparent'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <span className="text-sm leading-none">{icon}</span>
+                              <span className="truncate">{device.name}</span>
+                            </div>
+                            {device.is_active && (
+                              <span className="w-1.5 h-1.5 bg-green-500 rounded-full shadow-[0_0_8px_#22c55e]"></span>
+                            )}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-6">
           {brokenTracks.length > 0 && <span className="text-[10px] text-red-500 font-bold border border-red-500/20 px-2 py-1 rounded">Backlog: {brokenTracks.length}</span>}
