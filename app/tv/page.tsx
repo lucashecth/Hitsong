@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, useRef, Fragment } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useSession, signOut } from 'next-auth/react';
 
@@ -14,6 +15,7 @@ const CompactDisc = ({ large = false }) => (
 );
 
 export default function TVPage() {
+  const router = useRouter();
   const { data: session, update } = useSession();
   const [players, setPlayers] = useState<Player[]>([]);
   const [roomCode, setRoomCode] = useState<string>('');
@@ -110,9 +112,7 @@ export default function TVPage() {
   }, [session]);
 
   const irParaEdicao = () => {
-    const senha = prompt("Digite a senha de editor:");
-    if (senha === "1234") window.location.href = "/";
-    else alert("Senha incorreta!");
+    router.push('/');
   };
 
   const getCorrectIndex = (timeline: Track[], targetYear: number) => {
