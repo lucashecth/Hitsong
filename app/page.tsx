@@ -24,6 +24,7 @@ export default function Home() {
   const [searchTerm, setSearchTerm] = useState('');
   const [isFetching, setIsFetching] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [filterReported, setFilterReported] = useState(false);
 
   useEffect(() => {
     const carregarAcervoGlobal = async () => {
@@ -151,11 +152,15 @@ export default function Home() {
     if (!error) setSavedTracks(prev => prev.filter(t => t.id !== id));
   };
 
-  const filteredSavedTracks = savedTracks.filter(track => 
-    track.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    track.artist.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    track.year.includes(searchTerm)
-  );
+  const filteredSavedTracks = savedTracks.filter(track => {
+    const matchesSearch = track.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          track.artist.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          track.year.includes(searchTerm);
+    if (filterReported) {
+      return matchesSearch && (track as any).reported === true;
+    }
+    return matchesSearch;
+  });
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white font-sans p-8">
@@ -223,15 +228,28 @@ export default function Home() {
 
         {/* COLUNA 3: ACERVO GLOBAL */}
         <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-3xl shadow-xl flex flex-col max-h-[70vh]">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-bold">Acervo Global</h2>
-            <input 
-              type="text" 
-              placeholder="Filtro..." 
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-24 bg-zinc-950 border border-zinc-800 rounded-lg p-1 text-[10px] outline-none"
-            />
+          <div className="flex justify-between items-center mb-4 gap-2">
+            <h2 className="text-xl font-bold">Acervo ({filteredSavedTracks.length})</h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setFilterReported(!filterReported)}
+                className={`px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all border cursor-pointer ${
+                  filterReported
+                    ? 'bg-red-500/10 text-red-500 border-red-500/30'
+                    : 'bg-zinc-950 text-zinc-500 border-zinc-800 hover:text-white'
+                }`}
+                title="Mostrar apenas músicas reportadas com erro"
+              >
+                ⚠️ Reportadas
+              </button>
+              <input 
+                type="text" 
+                placeholder="Filtro..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-20 bg-zinc-950 border border-zinc-800 rounded-lg p-1.5 text-[9px] outline-none"
+              />
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
@@ -247,11 +265,16 @@ export default function Home() {
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                     </button>
                 </div>
-                <div className="flex justify-end">
-                    <span className="text-[8px] bg-zinc-900 text-zinc-500 px-2 py-0.5 rounded-full border border-zinc-800">
-                        Curador: <span className="text-blue-400">{track.cadastrado_por || 'Antigo'}</span>
-                    </span>
-                </div>
+                <div className="flex justify-end gap-1.5">
+                  {(track as any).reported && (
+                      <span className="text-[8px] bg-red-950 text-red-400 px-2 py-0.5 rounded-full border border-red-900/30 font-bold uppercase tracking-wider">
+                          ⚠️ Ano Errado
+                      </span>
+                  )}
+                  <span className="text-[8px] bg-zinc-900 text-zinc-500 px-2 py-0.5 rounded-full border border-zinc-800">
+                      Curador: <span className="text-blue-400">{track.cadastrado_por || 'Antigo'}</span>
+                  </span>
+              </div>
               </div>
             ))}
           </div>

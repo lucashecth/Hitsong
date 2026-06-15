@@ -21,6 +21,12 @@ export default function MobilePage() {
   const [timeline, setTimeline] = useState<Track[]>([]);
   const channelRef = useRef<any>(null);
 
+  // Estados para reporte de músicas
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
+  const [playedTracks, setPlayedTracks] = useState<Track[]>([]);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [reportedTrackIds, setReportedTrackIds] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     const savedName = localStorage.getItem('h_name');
     const savedRoom = localStorage.getItem('h_room');
@@ -39,6 +45,20 @@ export default function MobilePage() {
         setIsMyTurn(myTurn);
         setTimeline(payload.playerTimeline);
         setGameState(myTurn ? 'playing' : 'waiting');
+
+        if (payload.targetCard) {
+          setCurrentTrack(prev => {
+            if (prev && prev.id !== payload.targetCard.id) {
+              setPlayedTracks(history => {
+                if (!history.some(t => t.id === prev.id)) {
+                  return [prev, ...history];
+                }
+                return history;
+              });
+            }
+            return payload.targetCard;
+          });
+        }
       })
       .on('broadcast', { event: 'open-challenge' }, ({ payload }) => {
         const myData = payload.playersTokens.find((p: any) => p.name === name);
@@ -104,6 +124,28 @@ export default function MobilePage() {
   const votarBonus = (vote: boolean) => {
     channelRef.current?.send({ type: 'broadcast', event: 'vote-cast', payload: { name, vote } });
     setGameState('waiting'); // Esconde os botões pra não votar duas vezes
+  };
+
+  const reportarMusica = async (track: Track) => {
+    try {
+      const { error } = await supabase
+        .from('tracks')
+        .update({ reported: true })
+        .eq('id', track.id);
+      
+      if (!error) {
+        setReportedTrackIds(prev => {
+          const next = new Set(prev);
+          next.add(track.id);
+          return next;
+        });
+      } else {
+        alert("Erro ao reportar: " + error.message);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert("Erro de conexão ao reportar.");
+    }
   };
 
   if (!joined) {
@@ -258,6 +300,64 @@ export default function MobilePage() {
               Olhe para a TV!<br/>
               <span className="text-xl font-normal text-zinc-500 not-italic mt-4 block">(Aguarde o gabarito)</span>
             </h2>
+        </div>
+      )}
+
+      {/* FLOATING REPORT BUTTON */}
+      {(gameState === 'waiting' || gameState === 'result' || (gameState === 'bonus_vote' && isMyTurn)) && playedTracks.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40">
+          <button 
+            onClick={() => setIsReportModalOpen(true)}
+            className="bg-red-600 hover:bg-red-500 text-white border border-red-500/20 px-5 py-2.5 rounded-full text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all shadow-xl active:scale-95 cursor-pointer whitespace-nowrap"
+          >
+            ⚠️ Reportar Ano Errado
+          </button>
+        </div>
+      )}
+
+      {/* REPORT MODAL */}
+      {isReportModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-xl flex flex-col p-6 animate-in fade-in duration-300">
+          <div className="flex justify-between items-center pb-4 border-b border-zinc-800 mb-6 flex-shrink-0">
+            <div>
+              <h2 className="text-lg font-black text-white">Reportar Ano Errado</h2>
+              <p className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Histórico de Músicas do Jogo</p>
+            </div>
+            <button 
+              onClick={() => setIsReportModalOpen(false)}
+              className="text-zinc-400 hover:text-white text-xs bg-zinc-900 border border-zinc-800 px-3.5 py-1.5 rounded-full font-bold uppercase tracking-wider cursor-pointer"
+            >
+              Fechar
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
+            {playedTracks.map((track) => {
+              const isReported = reportedTrackIds.has(track.id);
+              return (
+                <div key={track.id} className="bg-zinc-900/60 border border-zinc-850 p-3.5 rounded-2xl flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 truncate min-w-0">
+                    <img src={track.imageUrl} className="w-10 h-10 rounded-lg object-cover flex-shrink-0 shadow-lg" alt="" />
+                    <div className="truncate text-left">
+                      <p className="text-xs font-bold text-white truncate">{track.name}</p>
+                      <p className="text-[10px] text-zinc-500 truncate">{track.artist} • {track.year}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => reportarMusica(track)}
+                    disabled={isReported}
+                    className={`flex-shrink-0 text-[10px] font-black uppercase px-3 py-2 rounded-xl border transition-all ${
+                      isReported 
+                        ? 'bg-zinc-800 text-zinc-600 border-zinc-700/50 cursor-not-allowed'
+                        : 'bg-red-500/10 text-red-500 border-red-500/30 hover:bg-red-500/20 active:scale-95 cursor-pointer'
+                    }`}
+                  >
+                    {isReported ? 'Reportado' : 'Reportar'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

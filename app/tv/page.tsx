@@ -583,6 +583,13 @@ export default function TVPage() {
             filter: blur(8px);
           }
         }
+        @keyframes slideUp {
+          0% { transform: translateY(120px) scale(0.6); opacity: 0; }
+          100% { transform: translateY(0) scale(1); opacity: 1; }
+        }
+        .anim-slide-up {
+          animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
       `}</style>
 
       {/* HEADER */}
@@ -749,9 +756,8 @@ export default function TVPage() {
             </div>
 
             {actionState === 'waiting' && (
-              <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 w-32 h-32 flex items-center justify-center">
+              <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-0 w-32 h-32 flex items-center justify-center">
                 <MusicalSpectrum />
-                <CompactDisc large />
               </div>
             )}
 
@@ -777,7 +783,9 @@ export default function TVPage() {
                               </div>
                             </div>
                           ) : (
-                            <CompactDisc />
+                            <div className="anim-slide-up">
+                              <CompactDisc />
+                            </div>
                           )}
                         </div>
                       )}
@@ -806,7 +814,9 @@ export default function TVPage() {
                           </div>
                         </div>
                       ) : (
-                        <CompactDisc />
+                        <div className="anim-slide-up">
+                          <CompactDisc />
+                        </div>
                       )}
                     </div>
                   )}
