@@ -15,36 +15,31 @@ const CompactDisc = ({ large = false }) => (
 );
 
 const MusicalSpectrum = () => {
-  const barsCount = 36;
   return (
-    <div className="absolute pointer-events-none z-0 flex items-center justify-center">
-      <div className="relative w-48 h-48 flex items-center justify-center">
-        {[...Array(barsCount)].map((_, i) => {
-          const rotation = (i * 360) / barsCount;
-          const duration = 0.5 + (i % 6) * 0.12;
-          const delay = (i % 8) * -0.15;
-          return (
-            <div
-              key={i}
-              className="absolute"
-              style={{
-                transform: `rotate(${rotation}deg) translateY(-80px)`,
-                transformOrigin: 'bottom center',
-              }}
-            >
-              <div
-                className="w-[3px] rounded-full bg-gradient-to-t from-purple-500 via-pink-500 to-cyan-400"
-                style={{
-                  height: '36px',
-                  transformOrigin: 'bottom center',
-                  animation: `pulseBar ${duration}s ease-in-out infinite alternate`,
-                  animationDelay: `${delay}s`,
-                }}
-              />
-            </div>
-          );
-        })}
-      </div>
+    <div className="absolute w-32 h-32 z-0 pointer-events-none flex items-center justify-center">
+      {/* Ripple 1 */}
+      <div 
+        className="absolute w-full h-full rounded-full bg-gradient-to-tr from-purple-600/40 to-fuchsia-600/40 border border-purple-500/20"
+        style={{
+          animation: 'ripple 3s cubic-bezier(0.1, 0.8, 0.3, 1) infinite',
+        }}
+      />
+      {/* Ripple 2 */}
+      <div 
+        className="absolute w-full h-full rounded-full bg-gradient-to-tr from-fuchsia-600/30 to-cyan-500/30 border border-pink-500/15"
+        style={{
+          animation: 'ripple 3s cubic-bezier(0.1, 0.8, 0.3, 1) infinite',
+          animationDelay: '1s',
+        }}
+      />
+      {/* Ripple 3 */}
+      <div 
+        className="absolute w-full h-full rounded-full bg-gradient-to-tr from-cyan-500/20 to-purple-600/20 border border-cyan-400/10"
+        style={{
+          animation: 'ripple 3s cubic-bezier(0.1, 0.8, 0.3, 1) infinite',
+          animationDelay: '2s',
+        }}
+      />
     </div>
   );
 };
@@ -572,9 +567,21 @@ export default function TVPage() {
         .anim-flip { animation: flipIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        @keyframes pulseBar {
-          0% { transform: scaleY(0.2); opacity: 0.3; }
-          100% { transform: scaleY(1.4); opacity: 1; }
+        @keyframes ripple {
+          0% {
+            transform: scale(0.95);
+            opacity: 0.8;
+            filter: blur(2px);
+          }
+          50% {
+            opacity: 0.5;
+            filter: blur(4px);
+          }
+          100% {
+            transform: scale(2.4);
+            opacity: 0;
+            filter: blur(8px);
+          }
         }
       `}</style>
 
@@ -742,7 +749,7 @@ export default function TVPage() {
             </div>
 
             {actionState === 'waiting' && (
-              <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 flex items-center justify-center">
+              <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 w-32 h-32 flex items-center justify-center">
                 <MusicalSpectrum />
                 <CompactDisc large />
               </div>
